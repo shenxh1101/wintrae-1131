@@ -11,6 +11,7 @@ import { usePlayerStore } from '@/store/usePlayerStore'
 import { useScoreStore } from '@/store/useScoreStore'
 import { ORDER_LEVELS, TIMED_LEVELS } from '@/data/mockData'
 import { cn } from '@/lib/utils'
+import type { LevelType } from '@/types'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -60,6 +61,7 @@ interface MenuCardProps {
   title: string
   subtitle: string
   statusText: string
+  extraInfo?: string
   progress: number
   maxProgress: number
   gradient: string
@@ -73,7 +75,7 @@ interface MenuCardProps {
 }
 
 function MenuCard({
-  icon, title, subtitle, statusText, progress, maxProgress,
+  icon, title, subtitle, statusText, extraInfo, progress, maxProgress,
   gradient, glowColor, borderColor, locked, completed, onClick, delay, iconBg
 }: MenuCardProps) {
   const progressPercent = maxProgress > 0 ? (progress / maxProgress) * 100 : 0
@@ -178,6 +180,14 @@ function MenuCard({
               </span>
             )}
           </div>
+          {extraInfo && (
+            <div className={cn(
+              'text-xs mt-0.5',
+              locked ? 'text-gray-500/70' : 'text-white/40'
+            )}>
+              {extraInfo}
+            </div>
+          )}
           {!locked && maxProgress > 0 && (
             <div className="h-2 rounded-full bg-black/30 overflow-hidden">
               <motion.div
@@ -434,6 +444,28 @@ export default function MainMenu() {
     .map(([, v]) => v))
   const bestOverallScore = Math.max(bestTutorialScore, bestOrderScore, bestTimedScore)
 
+  const formatMs = (ms: number) => {
+    const s = Math.floor(ms / 1000)
+    const m = Math.floor(s / 60)
+    return m > 0 ? `${m}分${s % 60}秒` : `${s}秒`
+  }
+
+  const getLatestRecordByType = (type: LevelType) => {
+    return scoreRecords.find(r => r.session.levelType === type) ?? null
+  }
+
+  const currentPlayableOrderLevel = unlockedLevels.length > 0
+    ? Math.min(Math.max(...unlockedLevels), totalOrderLevels)
+    : 0
+  const currentPlayableTimedLevel = unlockedTimedLevels.length > 0
+    ? Math.min(Math.max(...unlockedTimedLevels), totalTimedLevels)
+    : 0
+
+  const latestOrderRecord = getLatestRecordByType('order')
+  const latestTimedRecord = getLatestRecordByType('timed')
+  const latestTutorialRecord = getLatestRecordByType('tutorial')
+  const latestReviewRecord = scoreRecords[0] ?? null
+
   useEffect(() => {
     if (nickname === '新玩家') {
       setShowNicknameModal(true)
@@ -452,7 +484,12 @@ export default function MainMenu() {
       icon: <BookOpen className="w-7 h-7" />,
       title: '教学关',
       subtitle: '学习基础拣货操作流程',
-      statusText: tutorialCompleted ? '已掌握全部内容' : '尚未开始训练',
+      statusText: tutorialCompleted
+        ? `已完成 · 最近 ${latestTutorialRecord ? Math.round(latestTutorialRecord.score.totalScore) + '分' : '已完成'}`
+        : '学习基础操作 · 5个步骤',
+      extraInfo: tutorialCompleted
+        ? '已解锁订单关 L1 · 可进入真实训练'
+        : '通关后解锁订单关',
       progress: tutorialCompleted ? 1 : 0,
       maxProgress: 1,
       gradient: 'from-blue-600/20 to-blue-900/30',
@@ -470,11 +507,16 @@ export default function MainMenu() {
       subtitle: '按订单完成拣货任务',
       statusText: !tutorialCompleted
         ? '完成教学关解锁'
-        : unlockedLevels.length === 0
-        ? '已解锁 · 准备开始'
+        : completedOrderLevels === 0
+        ? `当前第 L${currentPlayableOrderLevel} 关`
         : completedOrderLevels < totalOrderLevels
-        ? `已通过 ${completedOrderLevels} 关`
+        ? `当前第 L${Math.min(currentPlayableOrderLevel, totalOrderLevels)} 关 · 已通过 ${completedOrderLevels}`
         : '全部通关！',
+      extraInfo: !tutorialCompleted
+        ? undefined
+        : latestOrderRecord
+        ? `最近：${Math.round(latestOrderRecord.score.totalScore)}分 · ${formatMs(latestOrderRecord.session.durationMs ?? 0)}`
+        : `通关 L${Math.min(currentPlayableOrderLevel, totalOrderLevels)} 解锁下一关`,
       progress: completedOrderLevels,
       maxProgress: totalOrderLevels,
       gradient: 'from-emerald-600/20 to-emerald-900/30',
@@ -492,11 +534,16 @@ export default function MainMenu() {
       subtitle: '时间压力下的效率考验',
       statusText: !unlockedLevels.includes(3)
         ? '完成订单关L3解锁'
-        : unlockedTimedLevels.length === 0
-        ? '已解锁 · 准备开始'
+        : completedTimedLevels === 0
+        ? `当前第 L${currentPlayableTimedLevel} 关`
         : completedTimedLevels < totalTimedLevels
-        ? `已通过 ${completedTimedLevels} 关`
+        ? `当前第 L${Math.min(currentPlayableTimedLevel, totalTimedLevels)} 关 · 已通过 ${completedTimedLevels}`
         : '全部通关！',
+      extraInfo: !unlockedLevels.includes(3)
+        ? '完成订单关 L3 后解锁'
+        : latestTimedRecord
+        ? `最近：${Math.round(latestTimedRecord.score.totalScore)}分`
+        : '通关当前关卡解锁下一关',
       progress: completedTimedLevels,
       maxProgress: totalTimedLevels,
       gradient: 'from-orange-600/20 to-orange-900/30',
@@ -512,9 +559,14 @@ export default function MainMenu() {
       icon: <Search className="w-7 h-7" />,
       title: '错误复盘',
       subtitle: '分析操作记录优化流程',
-      statusText: `${scoreRecords.length} 次复盘记录`,
-      progress: Math.min(scoreRecords.length, 20),
-      maxProgress: 20,
+      statusText: reviewCount === 0
+        ? '暂无记录'
+        : `可复盘 ${reviewCount} 局`,
+      extraInfo: reviewCount === 0
+        ? '完成一局训练后可复盘'
+        : `最近：${latestReviewRecord?.levelName ?? ''} · ${Math.round(latestReviewRecord?.score.totalScore ?? 0)}分`,
+      progress: Math.min(reviewCount, 10),
+      maxProgress: 10,
       gradient: 'from-purple-600/20 to-purple-900/30',
       glowColor: '#8B5CF6',
       borderColor: '#8B5CF6',

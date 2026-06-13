@@ -321,6 +321,7 @@ export default function TutorialLevel() {
   const [pickAnimation, setPickAnimation] = useState(false)
   const [stepCompleted, setStepCompleted] = useState(false)
   const [allDone, setAllDone] = useState(false)
+  const [completedSessionId, setCompletedSessionId] = useState<string>('')
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
   const [playerPath, setPlayerPath] = useState<Array<{ x: number; y: number }>>([{ ...START_POSITION }])
 
@@ -452,6 +453,8 @@ export default function TutorialLevel() {
         const sessionId = generateId('ses')
         const scoreId = generateId('scr')
 
+        setCompletedSessionId(sessionId)
+
         const gameSession: GameSession = {
           sessionId,
           playerId,
@@ -494,17 +497,13 @@ export default function TutorialLevel() {
         updateBestScore('tutorial-1', 500)
 
         setAllDone(true)
-
-        setTimeout(() => {
-          navigate('/')
-        }, 2000)
       } else {
         nextTutorialStep()
         setStepCompleted(false)
         setShowKnowledge(true)
       }
     }, 1200)
-  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, setTutorialCompleted, unlockLevel, updateAchievement, addTrainingTime, addScoreRecord, updateBestScore, playerId, nickname, navigate, operationLogs, playerPath])
+  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, setTutorialCompleted, unlockLevel, updateAchievement, addTrainingTime, addScoreRecord, updateBestScore, playerId, nickname, operationLogs, playerPath])
 
   const handleScan = useCallback(() => {
     if (scanAnimation || showKnowledge || allDone || stepCompleted) return
@@ -1100,7 +1099,7 @@ export default function TutorialLevel() {
                   >
                     <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-400/30">
                       <div className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider mb-0.5">解锁</div>
-                      <div className="text-white font-bold">订单关 ×10</div>
+                      <div className="text-white font-bold">订单关 L1 已解锁</div>
                     </div>
                     <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-400/30">
                       <div className="text-[10px] text-blue-400 font-bold uppercase tracking-wider mb-0.5">成就</div>

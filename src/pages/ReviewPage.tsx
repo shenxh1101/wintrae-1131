@@ -2,11 +2,11 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ArrowLeft, Download, AlertTriangle, XCircle, Package, ListOrdered,
+  ArrowLeft, ArrowRight, Download, AlertTriangle, XCircle, Package, ListOrdered,
   Play, Pause, SkipBack, SkipForward, Bookmark, BarChart3, Target,
   Clock, CheckCircle2, XSquare, TrendingUp, Lightbulb, Gauge,
   MapPin, Zap, Brain, ShieldAlert, Coins, MinusCircle, PlusCircle, Home,
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter, BookOpen
 } from 'lucide-react'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -14,6 +14,7 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 import { useScoreStore } from '@/store/useScoreStore'
+import { useReviewSwitcherState } from '@/store/useReviewSwitcherState'
 import { SHELVES, LOCATIONS, getProductBySku } from '@/data/mockData'
 import {
   identifyErrorNodes,
@@ -353,7 +354,8 @@ export default function ReviewPage() {
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [showRecordSwitcher, setShowRecordSwitcher] = useState(false)
-  const [recordFilter, setRecordFilter] = useState<'all' | LevelType>('all')
+  const recordFilter = useReviewSwitcherState((s) => s.recordFilter)
+  const setRecordFilter = useReviewSwitcherState((s) => s.setRecordFilter)
   const switcherRef = useRef<HTMLDivElement>(null)
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
 
@@ -381,6 +383,12 @@ export default function ReviewPage() {
       return
     }
 
+    if (sessionId === 'last' && scoreRecords.length > 0) {
+      const realSessionId = scoreRecords[0].session.sessionId
+      navigate(`/review/${realSessionId}`, { replace: true })
+      return
+    }
+
     const reviewData = convertScoreRecordToReviewData(record)
     if (!reviewData) {
       setData(null)
@@ -395,7 +403,7 @@ export default function ReviewPage() {
     setPlayTime(0)
     setCurrentLogIdx(0)
     setIsPlaying(false)
-  }, [sessionId, getSessionRecord])
+  }, [sessionId, getSessionRecord, scoreRecords, navigate])
 
   useEffect(() => {
     return () => {
@@ -520,9 +528,23 @@ export default function ReviewPage() {
   }, [data])
 
   const orderViewData = useMemo(() => {
-    if (!data) return []
+    if (!data) return { orders: [], isTutorial: false }
+    
+    if (data.levelType === 'tutorial') {
+      return { 
+        orders: [], 
+        isTutorial: true,
+        tutorialInfo: {
+          totalSteps: data.operations.filter(l => l.action !== 'move').length,
+          scanCount: data.operations.filter(l => l.action === 'scan').length,
+          pickCount: data.operations.filter(l => l.action === 'pick').length,
+          errorCount: data.operations.filter(l => !l.isCorrect).length,
+          durationMs: data.durationMs
+        }
+      }
+    }
 
-    const orderMap = new Map<string, {
+    const ordersMap = new Map<string, {
       orderId: string
       items: Map<string, {
         sku: string
@@ -538,77 +560,176 @@ export default function ReviewPage() {
         affectedByMerge: boolean
         errorType?: string
       }>
+      completedAt?: number
+      itemCount: number
     }>()
-
+    
+    const restockEvents: { timestamp: number; lockedLocations: string[] }[] = []
+    let mergedOrderHint = false
+    
     data.operations.forEach(log => {
-      const oid = log.payload.orderId
-      if (!oid) return
-
-      if (!orderMap.has(oid)) {
-        orderMap.set(oid, { orderId: oid, items: new Map() })
+      if (log.action === 'restock') {
+        const locks = log.payload.lockedLocations || []
+        if (locks.length > 0) {
+          restockEvents.push({ timestamp: log.timestamp, lockedLocations: locks })
+        }
       }
-      const order = orderMap.get(oid)!
-      const sku = log.payload.sku || 'unknown'
-
+      
+      if (log.payload.merged) {
+        mergedOrderHint = true
+      }
+      
       if (log.action === 'pick' && log.isCorrect) {
+        const oid = log.payload.orderId || 'unknown-order'
+        const sku = log.payload.sku || 'unknown-sku'
+        
+        if (!ordersMap.has(oid)) {
+          ordersMap.set(oid, { orderId: oid, items: new Map(), itemCount: 0 })
+        }
+        const order = ordersMap.get(oid)!
+        
         if (!order.items.has(sku)) {
           order.items.set(sku, {
-            sku, productName: log.payload.productName || sku,
-            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
-            pickedQty: 0, status: 'completed', steps: [],
+            sku,
+            productName: log.payload.productName || sku,
+            locationId: log.payload.locationId || '',
+            requiredQty: log.payload.requiredQuantity || 1,
+            pickedQty: 0,
+            status: 'completed',
+            steps: [],
             isNearExpiry: log.payload.isNearExpiry || false,
-            nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false
+            nearExpiryBonus: 0,
+            affectedByRestock: false,
+            affectedByMerge: false,
           })
         }
         const item = order.items.get(sku)!
         item.pickedQty += log.payload.quantity || 1
-        item.steps.push({ action: 'pick', timestamp: log.timestamp, isCorrect: true, detail: `拣取 ${log.payload.productName || sku}` })
         if (log.payload.isNearExpiry) item.nearExpiryBonus = 20
+        
+        for (const ev of restockEvents) {
+          if (ev.lockedLocations.includes(item.locationId) && 
+              ev.timestamp < log.timestamp &&
+              log.timestamp - ev.timestamp < 30000) {
+            item.affectedByRestock = true
+            break
+          }
+        }
+        
+        item.steps.push({ 
+          action: 'pick', 
+          timestamp: log.timestamp, 
+          isCorrect: true, 
+          detail: `拣取 ${log.payload.productName || sku} x${log.payload.quantity || 1}${log.payload.isNearExpiry ? ' (临期品+20)' : ''}` 
+        })
       }
-
+      
       if (log.action === 'pick' && !log.isCorrect) {
+        const oid = log.payload.orderId || 'unknown-order'
+        const sku = log.payload.sku || 'unknown-sku'
+        if (!ordersMap.has(oid)) {
+          ordersMap.set(oid, { orderId: oid, items: new Map(), itemCount: 0 })
+        }
+        const order = ordersMap.get(oid)!
         if (!order.items.has(sku)) {
           order.items.set(sku, {
-            sku, productName: log.payload.productName || sku,
-            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
-            pickedQty: 0, status: 'wrong', steps: [],
-            isNearExpiry: false, nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false,
+            sku,
+            productName: log.payload.productName || sku,
+            locationId: log.payload.locationId || '',
+            requiredQty: log.payload.requiredQuantity || 1,
+            pickedQty: 0,
+            status: 'wrong',
+            steps: [],
+            isNearExpiry: false,
+            nearExpiryBonus: 0,
+            affectedByRestock: false,
+            affectedByMerge: false,
             errorType: log.errorType
           })
         }
         const item = order.items.get(sku)!
         item.status = 'wrong'
-        item.steps.push({ action: 'error', timestamp: log.timestamp, isCorrect: false, detail: `错误: ${log.errorType || '未知'}` })
-      }
-
-      if (log.action === 'scan' && log.isCorrect) {
-        if (!order.items.has(sku)) {
-          order.items.set(sku, {
-            sku, productName: log.payload.productName || sku,
-            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
-            pickedQty: 0, status: 'missed', steps: [],
-            isNearExpiry: log.payload.isNearExpiry || false,
-            nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false
-          })
-        }
-        const item = order.items.get(sku)!
-        item.steps.push({ action: 'scan', timestamp: log.timestamp, isCorrect: true, detail: `扫描 ${log.payload.locationId}` })
-      }
-
-      if (log.action === 'restock') {
-        order.items.forEach(item => {
-          if (log.payload.lockedLocations?.includes(item.locationId)) {
-            item.affectedByRestock = true
-            item.steps.push({ action: 'restock', timestamp: log.timestamp, isCorrect: true, detail: `补货干扰: ${item.locationId}` })
-          }
+        item.errorType = log.errorType
+        item.steps.push({ 
+          action: 'error', 
+          timestamp: log.timestamp, 
+          isCorrect: false, 
+          detail: `错误: ${log.errorType ? (ERROR_CATEGORY_INFO[log.errorType as ReplayErrorType]?.label || log.errorType) : '未知'}` 
         })
       }
+      
+      if (log.action === 'scan') {
+        const oid = log.payload.orderId || 'unknown-order'
+        const sku = log.payload.sku || 'unknown-sku'
+        if (ordersMap.has(oid) && ordersMap.get(oid)!.items.has(sku)) {
+          const item = ordersMap.get(oid)!.items.get(sku)!
+          item.steps.push({ 
+            action: 'scan', 
+            timestamp: log.timestamp, 
+            isCorrect: log.isCorrect, 
+            detail: log.isCorrect ? `扫描 ${log.payload.locationId}` : `扫描失败: ${log.payload.locationId || '未知位置'}`
+          })
+        }
+      }
+      
+      if (log.action === 'place' && log.isCorrect) {
+        const oid = log.payload.orderId
+        if (oid && ordersMap.has(oid)) {
+          const order = ordersMap.get(oid)!
+          order.completedAt = log.timestamp
+          order.itemCount = log.payload.itemCount || order.items.size
+          
+          if (log.payload.merged) {
+            order.items.forEach(item => { item.affectedByMerge = true })
+          }
+          
+          order.items.forEach(item => {
+            item.steps.push({ 
+              action: 'place', 
+              timestamp: log.timestamp, 
+              isCorrect: true, 
+              detail: `订单结算完成 ${log.payload.totalQuantity ? `(共${log.payload.totalQuantity}件)` : ''}` 
+            })
+          })
+        }
+      }
     })
-
-    return Array.from(orderMap.entries()).map(([orderId, order]) => ({
+    
+    if (ordersMap.size === 0) {
+      data.operations.forEach(log => {
+        if (log.action === 'place' && log.isCorrect && log.payload.skus && log.payload.skus.length > 0) {
+          const oid = log.payload.orderId || 'unknown-order'
+          if (!ordersMap.has(oid)) {
+            ordersMap.set(oid, { orderId: oid, items: new Map(), itemCount: log.payload.itemCount || log.payload.skus.length, completedAt: log.timestamp })
+          }
+          const order = ordersMap.get(oid)!
+          log.payload.skus.forEach(s => {
+            order.items.set(s.sku, {
+              sku: s.sku,
+              productName: s.sku,
+              locationId: s.locationId || '',
+              requiredQty: 1,
+              pickedQty: 1,
+              status: 'completed',
+              steps: [{ action: 'place', timestamp: log.timestamp, isCorrect: true, detail: '订单结算' }],
+              isNearExpiry: s.isNearExpiry || false,
+              nearExpiryBonus: s.isNearExpiry ? 20 : 0,
+              affectedByRestock: false,
+              affectedByMerge: log.payload.merged || false,
+            })
+          })
+        }
+      })
+    }
+    
+    const orders = Array.from(ordersMap.entries()).map(([orderId, order]) => ({
       orderId,
+      itemCount: order.itemCount || order.items.size,
+      completedAt: order.completedAt,
       items: Array.from(order.items.values()),
     }))
+    
+    return { orders, isTutorial: false, mergedOrderHint }
   }, [data])
 
   const formatMs = (ms: number) => {
@@ -1472,49 +1593,112 @@ export default function ReviewPage() {
               </motion.div>
             )}
 
-            {activeTab === 'orders' && (
+            {activeTab === 'orders' && data && (
               <motion.div
                 key="orders"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.25 }}
-                className="space-y-4"
+                className="space-y-5"
               >
-                {orderViewData.length === 0 ? (
-                  <div className="p-10 text-center text-white/40">
-                    <ListOrdered size={40} className="mx-auto mb-3 text-white/20" />
-                    <div className="text-lg mb-1">该关卡无订单数据</div>
-                    <div className="text-sm">教学关等非订单关卡不提供订单视角分析</div>
+                {orderViewData.isTutorial ? (
+                  <div className="bg-white/5 rounded-2xl p-6 border border-blue-400/20">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
+                        <BookOpen size={20} className="text-blue-400" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-white">教学模式复盘</h3>
+                        <p className="text-sm text-white/50">教学关无订单数据，以下为基础操作训练总结</p>
+                      </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                      <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-400/20">
+                        <div className="text-xs text-blue-400 mb-1">总操作数</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.tutorialInfo?.totalSteps || 0}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-400/20">
+                        <div className="text-xs text-emerald-400 mb-1">扫描次数</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.tutorialInfo?.scanCount || 0}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-violet-500/10 border border-violet-400/20">
+                        <div className="text-xs text-violet-400 mb-1">拣取次数</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.tutorialInfo?.pickCount || 0}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-400/20">
+                        <div className="text-xs text-rose-400 mb-1">错误操作</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.tutorialInfo?.errorCount || 0}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+                        <div className="flex items-start gap-2">
+                          <CheckCircle2 size={18} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <div className="text-sm font-semibold text-white mb-1">操作流程已掌握</div>
+                            <div className="text-xs text-white/50">你已熟悉扫描→拣取→放置的完整拣货流程，可进入订单关实战训练。</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-4 rounded-xl bg-white/5 border border-white/10">
+                        <div className="flex items-start gap-2">
+                          <Zap size={18} className="text-amber-400 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <div className="text-sm font-semibold text-white mb-1">关键知识点</div>
+                            <div className="text-xs text-white/50 space-y-1">
+                              <p>• 移动到目标货位附近后再扫描</p>
+                              <p>• 确认商品 SKU 与订单一致后再拣取</p>
+                              <p>• 所有商品拣取完成后到收银台结算</p>
+                              <p>• 临期品优先拣取可获得额外奖励分</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-400/20">
+                        <div className="flex items-start gap-2">
+                          <ArrowRight size={18} className="text-orange-400 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <div className="text-sm font-semibold text-white mb-1">下一步建议</div>
+                            <div className="text-xs text-white/50">可从订单关 L1 开始实战训练，完成 3 关后解锁限时关挑战。</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : orderViewData.orders.length === 0 ? (
+                  <div className="bg-white/5 rounded-2xl p-8 text-center border border-white/5">
+                    <Package size={48} className="mx-auto text-white/20 mb-3" />
+                    <h3 className="text-lg font-semibold text-white/60 mb-1">暂无订单数据</h3>
+                    <p className="text-sm text-white/30">该关卡可能未记录完整订单信息，可查看其他标签页分析。</p>
                   </div>
                 ) : (
                   <>
                     <div className="grid grid-cols-3 gap-3">
-                      {(() => {
-                        const totalOrders = orderViewData.length
-                        const completedOrders = orderViewData.filter(o => o.items.every(it => it.status === 'completed')).length
-                        const errorOrders = orderViewData.filter(o => o.items.some(it => it.status === 'wrong' || it.status === 'missed')).length
-                        return [
-                          { label: '总订单数', value: totalOrders, icon: ListOrdered, color: 'text-sky-400', bg: 'bg-sky-500/15 border-sky-500/30' },
-                          { label: '完成订单', value: completedOrders, icon: CheckCircle2, color: 'text-emerald-400', bg: 'bg-emerald-500/15 border-emerald-500/30' },
-                          { label: '出错订单', value: errorOrders, icon: XCircle, color: 'text-rose-400', bg: 'bg-rose-500/15 border-rose-500/30' },
-                        ].map(stat => {
-                          const Icon = stat.icon
-                          return (
-                            <div key={stat.label} className={cn('rounded-xl p-3 border', stat.bg)}>
-                              <div className="flex items-center gap-2 mb-1">
-                                <Icon size={16} className={stat.color} />
-                                <span className="text-xs text-white/60">{stat.label}</span>
-                              </div>
-                              <div className={cn('text-2xl font-bold', stat.color)}>{stat.value}</div>
-                            </div>
-                          )
-                        })
-                      })()}
+                      <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-400/20">
+                        <div className="text-xs text-blue-400 mb-1">总订单数</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.orders.length}</div>
+                      </div>
+                      <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-400/20">
+                        <div className="text-xs text-emerald-400 mb-1">完成订单</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.orders.filter(o => o.completedAt).length}</div>
+                      </div>
+                      <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-400/20">
+                        <div className="text-xs text-rose-400 mb-1">出错订单</div>
+                        <div className="text-2xl font-bold text-white">{orderViewData.orders.filter(o => o.items.some(i => i.status === 'wrong')).length}</div>
+                      </div>
                     </div>
-
+                    
+                    {orderViewData.mergedOrderHint && (
+                      <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-400/20 flex items-center gap-2">
+                        <Zap size={16} className="text-amber-400 flex-shrink-0" />
+                        <span className="text-xs text-amber-200">本局使用了多订单合并拣货策略，部分商品可能已按最优化路径合并拣取。</span>
+                      </div>
+                    )}
+                    
                     <div className="space-y-3">
-                      {orderViewData.map(order => {
+                      {orderViewData.orders.map(order => {
                         const isExpanded = expandedOrders.has(order.orderId)
                         const completedCount = order.items.filter(it => it.status === 'completed').length
                         const errorCount = order.items.filter(it => it.status === 'wrong' || it.status === 'missed').length
@@ -1644,7 +1828,7 @@ export default function ReviewPage() {
                                           <div className="mt-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-xs">
                                             <div className="flex items-center gap-1 text-rose-400 font-medium mb-0.5">
                                               <XCircle size={12} />
-                                              错误类型: {item.errorType}
+                                              错误类型: {ERROR_CATEGORY_INFO[item.errorType as ReplayErrorType]?.label || item.errorType}
                                             </div>
                                             <div className="text-white/50">
                                               建议: 请仔细核对商品 SKU 和货位信息，确认后再进行拣取操作

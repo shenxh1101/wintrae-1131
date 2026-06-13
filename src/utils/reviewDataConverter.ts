@@ -94,6 +94,14 @@ function findAdjacentAisle(targetLoc: MockLocation, grid: GridNode[][]): { x: nu
 
 function parsePayload(payload: string | ActionPayload): ActionPayload {
   if (typeof payload === 'string') {
+    try {
+      const parsed = JSON.parse(payload)
+      if (parsed && typeof parsed === 'object') {
+        return parsed as ActionPayload
+      }
+    } catch {
+    }
+
     const result: ActionPayload = {}
     const str = payload
 

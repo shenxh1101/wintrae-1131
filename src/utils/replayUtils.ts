@@ -86,6 +86,18 @@ export interface ActionPayload {
   orderId?: string;
   /** 补货干扰锁定的货位ID列表 */
   lockedLocations?: string[];
+  /** 订单项ID */
+  itemId?: string;
+  /** 订单商品数量 */
+  itemCount?: number;
+  /** 订单总件数 */
+  totalQuantity?: number;
+  /** 临期品数量 */
+  nearExpiryCount?: number;
+  /** 是否多订单合并 */
+  merged?: boolean;
+  /** 订单包含的SKU列表 */
+  skus?: Array<{ sku: string; locationId?: string; isNearExpiry?: boolean }>;
 }
 
 /**

@@ -240,7 +240,17 @@ export const useGameStore = create<GameState>()((set, get) => ({
     const stock = getStockByLocation(nearbyLocation.locationId)
     const product = stock ? getProductBySku(stock.sku) : undefined
 
-    get().addOperationLog('scan', nearbyLocation.locationId, true)
+    const currentItem = get().getCurrentItem()
+    const currentOrder = get().getCurrentOrder()
+    const scanPayload = JSON.stringify({
+      locationId: nearbyLocation.locationId,
+      sku: stock?.sku ?? null,
+      orderId: currentOrder?.orderId ?? null,
+      productName: product?.name ?? null,
+      requiredQuantity: currentItem?.requiredQty ?? null,
+      isNearExpiry: stock?.isNearExpiry ?? false
+    })
+    get().addOperationLog('scan', scanPayload, true)
 
     return {
       success: true,
@@ -375,11 +385,21 @@ export const useGameStore = create<GameState>()((set, get) => ({
       }
     })
 
-    get().addOperationLog(
-      'pick',
-      `${nearbyLocation.locationId}:${stock.sku}x${quantity}`,
-      true
-    )
+    const stateNow = get()
+    const currentItemNow = stateNow.getCurrentItem()
+    const currentOrderNow = stateNow.getCurrentOrder()
+    const pickProduct = getProductBySku(stock.sku)
+    const pickPayload = JSON.stringify({
+      locationId: nearbyLocation.locationId,
+      sku: stock.sku,
+      quantity,
+      orderId: currentOrderNow?.orderId ?? null,
+      itemId: currentItemNow?.itemId ?? null,
+      productName: pickProduct?.name ?? null,
+      requiredQuantity: currentItemNow?.requiredQty ?? null,
+      isNearExpiry: stock.isNearExpiry
+    })
+    get().addOperationLog('pick', pickPayload, true)
 
     return {
       success: true,
@@ -427,11 +447,17 @@ export const useGameStore = create<GameState>()((set, get) => ({
       }
     })
 
-    get().addOperationLog(
-      'place',
-      `order_${currentOrder.orderId}_completed`,
-      true
-    )
+    const stateBeforePlace = get()
+    const toteItems = stateBeforePlace.toteItems
+    const placePayload = JSON.stringify({
+      orderId: currentOrder.orderId,
+      itemCount: pickedItems.length,
+      totalQuantity: toteItems.reduce((sum, t) => sum + t.quantity, 0),
+      nearExpiryCount: toteItems.filter(t => t.isNearExpiry).length,
+      merged: stateBeforePlace.orders.length > 1,
+      skus: toteItems.map(t => ({ sku: t.sku, locationId: t.locationId, isNearExpiry: t.isNearExpiry }))
+    })
+    get().addOperationLog('place', placePayload, true)
 
     get().addEvent('milestone', `订单 ${currentOrder.orderId} 结算完成!`)
 
