@@ -110,6 +110,14 @@ export interface OperationLog {
   playerPosition?: Position;
 }
 
+export interface ScoreDetailItem {
+  id: string;
+  label: string;
+  value: number;
+  maxValue?: number;
+  type: 'positive' | 'negative' | 'neutral';
+}
+
 export interface Score {
   scoreId: string;
   sessionId: string;
@@ -123,6 +131,12 @@ export interface Score {
   raceConditionBonus?: number;
   operationLogs?: OperationLog[];
   playerPath?: Position[];
+  scoreDetails: ScoreDetailItem[];
+  mergeBonus: number;
+  missPenalty: number;
+  wrongPenalty: number;
+  levelName: string;
+  completed: boolean;
 }
 
 export interface Achievement {

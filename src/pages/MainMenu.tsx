@@ -477,15 +477,15 @@ export default function MainMenu() {
       icon: <Timer className="w-7 h-7" />,
       title: '限时关',
       subtitle: '时间压力下的效率考验',
-      statusText: '解锁进度',
+      statusText: unlockedLevels.includes(3) ? '解锁进度' : '完成订单关L3解锁',
       progress: timedProgress,
       maxProgress: totalTimedLevels,
       gradient: 'from-orange-600/20 to-orange-900/30',
       glowColor: '#F59E0B',
       borderColor: '#F59E0B',
-      locked: false,
+      locked: !unlockedLevels.includes(3),
       iconBg: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
-      onClick: () => navigate('/timed')
+      onClick: () => unlockedLevels.includes(3) && navigate('/timed')
     },
     {
       key: 'review',
@@ -500,7 +500,7 @@ export default function MainMenu() {
       borderColor: '#8B5CF6',
       locked: scoreRecords.length === 0,
       iconBg: 'bg-purple-500/20 text-purple-400 border border-purple-500/30',
-      onClick: () => scoreRecords.length > 0 && navigate('/review/last')
+      onClick: () => scoreRecords.length > 0 && navigate('/review')
     },
     {
       key: 'leaderboard',

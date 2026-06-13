@@ -5,6 +5,7 @@ import TutorialLevel from "@/pages/TutorialLevel";
 import OrderLevel from "@/pages/OrderLevel";
 import TimedLevel from "@/pages/TimedLevel";
 import ReviewPage from "@/pages/ReviewPage";
+import ReviewList from "@/pages/ReviewList";
 import Leaderboard from "@/pages/Leaderboard";
 
 const pageVariants = {
@@ -72,6 +73,20 @@ function AnimatedRoutes() {
               transition={{ duration: 0.3 }}
             >
               <TimedLevel />
+            </motion.div>
+          }
+        />
+        <Route
+          path="/review"
+          element={
+            <motion.div
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={{ duration: 0.3 }}
+            >
+              <ReviewList />
             </motion.div>
           }
         />

@@ -11,7 +11,8 @@ import { usePlayerStore } from '@/store/usePlayerStore'
 import { useScoreStore } from '@/store/useScoreStore'
 import {
   TUTORIAL_STEPS, SHELVES, LOCATIONS, STOCK_ITEMS,
-  getLocationById, getStockByLocation, getProductBySku
+  getLocationById, getStockByLocation, getProductBySku,
+  START_POSITION
 } from '@/data/mockData'
 import type { Order, OrderItem, Score, GameSession } from '@/types'
 import { cn, generateId } from '@/lib/utils'
@@ -305,7 +306,7 @@ export default function TutorialLevel() {
     playerPosition, moveStep, startGame, resetGame,
     scanLocation, pickItem, placeItemAtCheckout,
     setLevel, setStocks, setOrders, getNearbyLocation, isAtCheckout,
-    toteItems, getCurrentOrderItems
+    toteItems, getCurrentOrderItems, operationLogs
   } = useGameStore()
   const {
     playerId, nickname, tutorialCompleted,
@@ -321,6 +322,7 @@ export default function TutorialLevel() {
   const [stepCompleted, setStepCompleted] = useState(false)
   const [allDone, setAllDone] = useState(false)
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
+  const [playerPath, setPlayerPath] = useState<Array<{ x: number; y: number }>>([{ ...START_POSITION }])
 
   const currentStep = TUTORIAL_STEPS[tutorialStepIndex]
   const currentKnowledge = KNOWLEDGE_DATA[tutorialStepIndex]
@@ -360,8 +362,25 @@ export default function TutorialLevel() {
     startGame()
     setTutorialStepIndex(0)
     setShowKnowledge(true)
+    setPlayerPath([{ ...START_POSITION }])
     startTimeRef.current = Date.now()
   }, [])
+
+  const lastMoveLogRef = useRef<number>(0)
+
+  useEffect(() => {
+    const now = Date.now()
+    if (now - lastMoveLogRef.current > 150) {
+      lastMoveLogRef.current = now
+      setPlayerPath((prev) => {
+        const last = prev[prev.length - 1]
+        if (!last || Math.abs(last.x - playerPosition.x) > 0.15 || Math.abs(last.y - playerPosition.y) > 0.15) {
+          return [...prev, { ...playerPosition }]
+        }
+        return prev
+      })
+    }
+  }, [playerPosition])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -427,7 +446,6 @@ export default function TutorialLevel() {
 
         setTutorialCompleted(true)
         unlockLevel(1, 'order')
-        unlockLevel(1, 'timed')
         updateAchievement({ totalGames: (usePlayerStore.getState().achievement.totalGames || 0) + 1 })
         addTrainingTime(trainingMinutes)
 
@@ -445,6 +463,14 @@ export default function TutorialLevel() {
           status: 'completed'
         }
 
+        const scoreDetails = [
+          { id: 'base', label: '基础分', value: 300, maxValue: 300, type: 'positive' as const },
+          { id: 'time', label: '时间奖励', value: 100, maxValue: 100, type: 'positive' as const },
+          { id: 'path', label: '路径规划分', value: 80, maxValue: 100, type: 'positive' as const },
+          { id: 'acc', label: '准确率得分', value: 100, maxValue: 100, type: 'positive' as const },
+          { id: 'complete', label: '完成奖励', value: 20, type: 'positive' as const }
+        ]
+
         const score: Score = {
           scoreId,
           sessionId,
@@ -453,10 +479,18 @@ export default function TutorialLevel() {
           timeBonus: 100,
           pathScore: 80,
           penaltyPoints: 0,
-          rank: 1
+          rank: 1,
+          levelName: '教学关',
+          completed: true,
+          mergeBonus: 0,
+          missPenalty: 0,
+          wrongPenalty: 0,
+          scoreDetails,
+          operationLogs: [...operationLogs],
+          playerPath: [...playerPath]
         }
 
-        addScoreRecord(score, gameSession, nickname)
+        addScoreRecord(score, gameSession, nickname, '教学关')
         updateBestScore('tutorial-1', 500)
 
         setAllDone(true)
@@ -470,7 +504,7 @@ export default function TutorialLevel() {
         setShowKnowledge(true)
       }
     }, 1200)
-  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, setTutorialCompleted, unlockLevel, updateAchievement, addTrainingTime, addScoreRecord, updateBestScore, playerId, nickname, navigate])
+  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, setTutorialCompleted, unlockLevel, updateAchievement, addTrainingTime, addScoreRecord, updateBestScore, playerId, nickname, navigate, operationLogs, playerPath])
 
   const handleScan = useCallback(() => {
     if (scanAnimation || showKnowledge || allDone || stepCompleted) return

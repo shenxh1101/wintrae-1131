@@ -21,6 +21,7 @@ import GameNotification, { GameEventNotification } from '@/components/GameNotifi
 import LevelResultModal, { LevelResultData, GradeRank, ScoreDetailItem } from '@/components/LevelResultModal'
 import {
   ORDER_LEVELS,
+  TIMED_LEVELS,
   LOCATIONS,
   SHELVES,
   STOCK_ITEMS,
@@ -143,6 +144,7 @@ export default function OrderLevel() {
   const unlockedLevels = usePlayerStore((s) => s.unlockedLevels)
   const bestScores = usePlayerStore((s) => s.bestScores)
   const unlockLevel = usePlayerStore((s) => s.unlockLevel)
+  const checkAndUnlockTimedLevel = usePlayerStore((s) => s.checkAndUnlockTimedLevel)
   const updateBestScore = usePlayerStore((s) => s.updateBestScore)
   const addTrainingTime = usePlayerStore((s) => s.addTrainingTime)
   const updateAchievement = usePlayerStore((s) => s.updateAchievement)
@@ -154,12 +156,6 @@ export default function OrderLevel() {
 
   const gameState = useGameStore()
   const grid = useMemo(() => buildGrid(), [])
-
-  useEffect(() => {
-    if (!unlockedLevels.includes(1)) {
-      unlockLevel(1, 'order')
-    }
-  }, [unlockedLevels, unlockLevel])
 
   const currentLevel = ORDER_LEVELS.find((l) => l.levelId === selectedLevelId) ?? ORDER_LEVELS[0]
 
@@ -580,14 +576,16 @@ export default function OrderLevel() {
       const accuracyScoreVal = Math.round((finalAccuracy / 100) * GAME_CONFIG.maxAccuracyScore)
       const baseScoreVal = currentLevel.baseScore
 
-      const wrongPicks = state.operationLogs.filter(
+      const missedItems = state.orderItems.filter((oi) => !oi.picked).length
+      const wrongPicksCount = state.operationLogs.filter(
         (l) => l.action === 'pick' && !l.isCorrect
       ).length
-      const penalty = wrongPicks * GAME_CONFIG.wrongPickPenalty
+      const missPenaltyVal = missedItems * GAME_CONFIG.missPickPenalty
+      const wrongPenaltyVal = wrongPicksCount * GAME_CONFIG.wrongPickPenalty
 
       const totalScore = Math.max(
         0,
-        baseScoreVal + timeBonusVal + accuracyScoreVal + pathScoreVal + nearExpiryBonus + eventBonus - penalty
+        baseScoreVal + timeBonusVal + accuracyScoreVal + pathScoreVal + nearExpiryBonus + eventBonus - wrongPenaltyVal - missPenaltyVal
       )
 
       const maxPossibleScore =
@@ -606,6 +604,7 @@ export default function OrderLevel() {
 
       if (completed) {
         unlockLevel(selectedLevelId, 'order')
+        checkAndUnlockTimedLevel()
       }
       if (isNewBest) {
         updateBestScore(bestKey, totalScore)
@@ -624,6 +623,17 @@ export default function OrderLevel() {
       updateAbilityRadar('pathPlanning', pathValue)
       updateAbilityRadar('emergency', emergencyValue)
 
+      const details: ScoreDetailItem[] = [
+        { id: 'base', label: '基础分', value: baseScoreVal, maxValue: currentLevel.baseScore, type: 'positive' },
+        { id: 'time', label: '时间奖励', value: timeBonusVal, maxValue: GAME_CONFIG.maxTimeBonus, type: 'positive' },
+        { id: 'acc', label: '准确率得分', value: accuracyScoreVal, maxValue: GAME_CONFIG.maxAccuracyScore, type: 'positive' },
+        { id: 'path', label: '路径规划分', value: pathScoreVal, maxValue: GAME_CONFIG.maxPathScore, type: 'positive' },
+        { id: 'near', label: '临期品奖励', value: nearExpiryBonus, type: 'positive' },
+        { id: 'event', label: '应急处理奖励', value: eventBonus, type: 'positive' },
+        { id: 'wrong', label: '误操作扣分', value: wrongPenaltyVal, type: 'negative' },
+        { id: 'miss', label: '漏拣扣分', value: missPenaltyVal, type: 'negative' },
+      ]
+
       const scoreRecord: ScoreType = {
         scoreId: generateId('scr'),
         sessionId: state.sessionId,
@@ -631,12 +641,18 @@ export default function OrderLevel() {
         accuracy: Number(finalAccuracy.toFixed(1)),
         timeBonus: timeBonusVal,
         pathScore: pathScoreVal,
-        penaltyPoints: penalty,
+        penaltyPoints: wrongPenaltyVal + missPenaltyVal,
         rank: 0,
         nearExpiryBonus,
         raceConditionBonus: eventBonus,
         operationLogs: [...state.operationLogs],
         playerPath: [...playerPath],
+        scoreDetails: details,
+        mergeBonus: 0,
+        missPenalty: missPenaltyVal,
+        wrongPenalty: wrongPenaltyVal,
+        levelName: currentLevel.name,
+        completed,
       }
 
       const session: GameSession = {
@@ -649,24 +665,14 @@ export default function OrderLevel() {
         endTime: new Date().toISOString(),
         status: completed ? 'completed' : 'failed',
       }
-      addScoreRecord(scoreRecord, session, nickname)
-
-      const details: ScoreDetailItem[] = [
-        { id: 'base', label: '基础分', value: baseScoreVal, maxValue: currentLevel.baseScore, type: 'positive' },
-        { id: 'time', label: '时间奖励', value: timeBonusVal, maxValue: GAME_CONFIG.maxTimeBonus, type: 'positive' },
-        { id: 'acc', label: '准确率得分', value: accuracyScoreVal, maxValue: GAME_CONFIG.maxAccuracyScore, type: 'positive' },
-        { id: 'path', label: '路径规划分', value: pathScoreVal, maxValue: GAME_CONFIG.maxPathScore, type: 'positive' },
-        { id: 'near', label: '临期品奖励', value: nearExpiryBonus, type: 'positive' },
-        { id: 'event', label: '应急处理奖励', value: eventBonus, type: 'positive' },
-        { id: 'penalty', label: '误操作扣分', value: penalty, type: 'negative' },
-      ]
+      addScoreRecord(scoreRecord, session, nickname, currentLevel.name)
 
       const unlocks: { id: string; title: string; description: string; icon: 'level' | 'achievement' | 'skin' }[] = []
-      if (completed && selectedLevelId < 10 && isNewBest) {
+      if (completed && selectedLevelId === 3 && !usePlayerStore.getState().unlockedTimedLevels.includes(1)) {
         unlocks.push({
-          id: `lvl-${selectedLevelId + 1}`,
-          title: `解锁关卡 ${selectedLevelId + 1}`,
-          description: ORDER_LEVELS.find((l) => l.levelId === selectedLevelId + 1)?.name ?? '新关卡',
+          id: 'timed-1',
+          title: '解锁限时关 T1',
+          description: TIMED_LEVELS.find((l) => l.levelId === 1)?.name ?? '新限时关卡',
           icon: 'level',
         })
       }
@@ -683,7 +689,7 @@ export default function OrderLevel() {
         pathScore: pathScoreVal,
         nearExpiryBonus,
         raceConditionBonus: eventBonus,
-        penaltyPoints: penalty,
+        penaltyPoints: wrongPenaltyVal + missPenaltyVal,
         details,
         stars,
         isNewBest,
@@ -701,6 +707,7 @@ export default function OrderLevel() {
       selectedLevelId,
       bestScores,
       unlockLevel,
+      checkAndUnlockTimedLevel,
       updateBestScore,
       addTrainingTime,
       updateAchievement,

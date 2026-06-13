@@ -5,7 +5,7 @@ import {
   ArrowLeft, Download, AlertTriangle, XCircle, Package, ListOrdered,
   Play, Pause, SkipBack, SkipForward, Bookmark, BarChart3, Target,
   Clock, CheckCircle2, XSquare, TrendingUp, Lightbulb, Gauge,
-  MapPin, Zap, Brain, ShieldAlert
+  MapPin, Zap, Brain, ShieldAlert, Coins, MinusCircle, PlusCircle, Home
 } from 'lucide-react'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 import { useScoreStore } from '@/store/useScoreStore'
-import { SHELVES, LOCATIONS, PRODUCTS, getProductBySku } from '@/data/mockData'
+import { SHELVES, LOCATIONS, getProductBySku } from '@/data/mockData'
 import {
   identifyErrorNodes,
   extractKeyframes,
@@ -26,6 +26,10 @@ import {
   type Keyframe,
   type ErrorType as ReplayErrorType
 } from '@/utils/replayUtils'
+import {
+  convertScoreRecordToReviewData,
+  type ReviewSessionData,
+} from '@/utils/reviewDataConverter'
 import type { Position } from '@/types'
 
 const CELL_SIZE = 32
@@ -41,241 +45,7 @@ const AREA_COLORS: Record<string, string> = {
   'D区': '#F59E0B',
 }
 
-type TabType = 'errors' | 'replay' | 'analysis'
-
-interface MockSessionData {
-  sessionId: string
-  levelName: string
-  levelId: number
-  durationMs: number
-  score: number
-  accuracy: number
-  operations: OperationLog[]
-  playerPath: Position[]
-  optimalPath: Position[]
-  optimalOrderSequence: { locationId: string; order: number }[]
-  errorPositions: { x: number; y: number; errorType: ReplayErrorType }[]
-  itemPickTimes: { name: string; time: number }[]
-  abilityScores: {
-    time: number
-    accuracy: number
-    pathPlanning: number
-    emergency: number
-  }
-}
-
-const generateMockSessionData = (sessionId: string): MockSessionData => {
-  const seed = sessionId.split('').reduce((a, c) => a + c.charCodeAt(0), 0)
-  const random = (min: number, max: number) => {
-    const x = Math.sin(seed + min * max) * 10000
-    return Math.floor((x - Math.floor(x)) * (max - min + 1)) + min
-  }
-
-  const startPos: Position = { x: 10, y: 13 }
-  const playerPath: Position[] = [startPos]
-  const optimalPath: Position[] = [startPos]
-  const usedLocations = new Set<string>()
-  const optimalOrderSequence: { locationId: string; order: number }[] = []
-  const errorPositions: { x: number; y: number; errorType: ReplayErrorType }[] = []
-  const operations: OperationLog[] = []
-  const itemPickTimes: { name: string; time: number }[] = []
-
-  let timestamp = 0
-
-  operations.push({
-    logId: `log-start-${seed}`,
-    sessionId,
-    timestamp: 0,
-    action: 'start',
-    payload: { playerX: 10, playerY: 13 },
-    isCorrect: true,
-  })
-
-  const targetCount = 6
-  const locs = LOCATIONS.filter(l => !usedLocations.has(l.locationId))
-  const targetLocs: typeof LOCATIONS = []
-
-  for (let i = 0; i < targetCount && i < locs.length; i++) {
-    const idx = random(i * 7, Math.min(i * 7 + 20, locs.length - 1))
-    targetLocs.push(locs[idx])
-    usedLocations.add(locs[idx].locationId)
-  }
-
-  targetLocs.forEach((loc, idx) => {
-    optimalOrderSequence.push({ locationId: loc.locationId, order: idx + 1 })
-
-    const steps = Math.abs(loc.posX - optimalPath[optimalPath.length - 1].x) +
-      Math.abs(loc.posY - optimalPath[optimalPath.length - 1].y)
-    for (let s = 0; s < Math.min(steps, 3); s++) {
-      const last = optimalPath[optimalPath.length - 1]
-      optimalPath.push({
-        x: last.x + (loc.posX > last.x ? 1 : loc.posX < last.x ? -1 : 0),
-        y: last.y + (loc.posY > last.y ? 1 : loc.posY < last.y ? -1 : 0),
-      })
-    }
-    optimalPath.push({ x: Math.floor(loc.posX), y: Math.floor(loc.posY) })
-  })
-
-  const checkout: Position = { x: 18, y: 13 }
-  const lastOpt = optimalPath[optimalPath.length - 1]
-  for (let s = 0; s < 4; s++) {
-    optimalPath.push({
-      x: lastOpt.x + Math.sign(checkout.x - lastOpt.x) * (s + 1),
-      y: lastOpt.y,
-    })
-  }
-  optimalPath.push(checkout)
-
-  targetLocs.forEach((loc, idx) => {
-    const last = playerPath[playerPath.length - 1]
-    const extraSteps = idx % 2 === 0 ? 2 : 0
-    if (extraSteps > 0) {
-      playerPath.push({ x: last.x + 1, y: last.y })
-      playerPath.push({ x: last.x + 1, y: last.y - 1 })
-    }
-    const steps = Math.abs(loc.posX - playerPath[playerPath.length - 1].x) +
-      Math.abs(loc.posY - playerPath[playerPath.length - 1].y)
-    for (let s = 0; s < Math.min(steps, 4); s++) {
-      const pl = playerPath[playerPath.length - 1]
-      playerPath.push({
-        x: pl.x + (loc.posX > pl.x ? 1 : loc.posX < pl.x ? -1 : 0),
-        y: pl.y + (loc.posY > pl.y ? 1 : loc.posY < pl.y ? -1 : 0),
-      })
-      timestamp += 800
-      operations.push({
-        logId: `log-move-${seed}-${idx}-${s}`,
-        sessionId,
-        timestamp,
-        action: 'move',
-        payload: {
-          playerX: playerPath[playerPath.length - 1].x,
-          playerY: playerPath[playerPath.length - 1].y,
-          targetX: loc.posX,
-          targetY: loc.posY,
-        },
-        isCorrect: true,
-      })
-    }
-    playerPath.push({ x: Math.floor(loc.posX), y: Math.floor(loc.posY) })
-    timestamp += 2000
-
-    operations.push({
-      logId: `log-scan-${seed}-${idx}`,
-      sessionId,
-      timestamp,
-      action: 'scan',
-      payload: {
-        playerX: Math.floor(loc.posX),
-        playerY: Math.floor(loc.posY),
-        locationId: loc.locationId,
-      },
-      isCorrect: true,
-    })
-
-    if (idx === 1 || idx === 4) {
-      timestamp += 500
-      const errorType: ReplayErrorType = idx === 1 ? 'wrong_sku' : 'wrong_quantity'
-      errorPositions.push({ x: Math.floor(loc.posX), y: Math.floor(loc.posY), errorType })
-      operations.push({
-        logId: `log-error-${seed}-${idx}`,
-        sessionId,
-        timestamp,
-        action: 'error',
-        payload: {
-          playerX: Math.floor(loc.posX),
-          playerY: Math.floor(loc.posY),
-          locationId: loc.locationId,
-          sku: getProductBySku(STOCK_SKUS[idx % STOCK_SKUS.length])?.sku,
-          requiredQuantity: 2,
-          quantity: idx === 4 ? 1 : undefined,
-        },
-        isCorrect: false,
-        errorType,
-        errorMessage: idx === 1 ? '拣取了错误的SKU商品' : '拣取数量与订单要求不符',
-      })
-      timestamp += 3000
-    }
-
-    const stock = PRODUCTS.find(p => p.sku === STOCK_SKUS[(idx + 3) % STOCK_SKUS.length])
-    timestamp += 1500
-    operations.push({
-      logId: `log-pick-${seed}-${idx}`,
-      sessionId,
-      timestamp,
-      action: 'pick',
-      payload: {
-        playerX: Math.floor(loc.posX),
-        playerY: Math.floor(loc.posY),
-        locationId: loc.locationId,
-        sku: stock?.sku,
-        productName: stock?.name,
-        quantity: 1,
-        isNearExpiry: idx === 2,
-      },
-      isCorrect: true,
-    })
-
-    const pickTimeSec = random(15, 45)
-    itemPickTimes.push({ name: stock?.name?.slice(0, 6) || `Item${idx + 1}`, time: pickTimeSec })
-  })
-
-  errorPositions.push({ x: 14, y: 8, errorType: 'missed' })
-
-  operations.push({
-    logId: `log-restock-${seed}`,
-    sessionId,
-    timestamp: timestamp + 5000,
-    action: 'restock',
-    payload: {
-      playerX: 8,
-      playerY: 5,
-      lockedLocations: targetLocs.slice(0, 2).map(l => l.locationId),
-    },
-    isCorrect: true,
-  })
-
-  for (let s = 0; s < 5; s++) {
-    const pl = playerPath[playerPath.length - 1]
-    playerPath.push({
-      x: pl.x + Math.sign(checkout.x - pl.x),
-      y: pl.y + Math.sign(checkout.y - pl.y) * (s % 2 === 0 ? 0 : 1),
-    })
-  }
-  playerPath.push(checkout)
-  timestamp += 10000
-
-  operations.push({
-    logId: `log-end-${seed}`,
-    sessionId,
-    timestamp,
-    action: 'end',
-    payload: { playerX: checkout.x, playerY: checkout.y },
-    isCorrect: true,
-  })
-
-  return {
-    sessionId,
-    levelName: `订单训练关 ${random(1, 10)}`,
-    levelId: random(1, 10),
-    durationMs: timestamp,
-    score: random(580, 820),
-    accuracy: random(82, 97),
-    operations,
-    playerPath,
-    optimalPath,
-    optimalOrderSequence,
-    errorPositions,
-    itemPickTimes,
-    abilityScores: {
-      time: random(60, 95),
-      accuracy: random(75, 98),
-      pathPlanning: random(55, 90),
-      emergency: random(40, 85),
-    },
-  }
-}
-
-const STOCK_SKUS = PRODUCTS.slice(0, 10).map(p => p.sku)
+type TabType = 'errors' | 'replay' | 'analysis' | 'score'
 
 interface ReviewMapProps {
   type: 'player' | 'optimal'
@@ -549,13 +319,26 @@ const ERROR_CATEGORY_INFO: Record<ReplayErrorType, { label: string; icon: typeof
 
 const PIE_COLORS = ['#F43F5E', '#F97316', '#EAB308', '#8B5CF6', '#EF4444', '#EC4899']
 
+const SCORE_DETAIL_ITEMS = [
+  { key: 'baseScore', label: '基础完成分', icon: CheckCircle2, type: 'positive' as const, color: 'text-emerald-400' },
+  { key: 'timeBonus', label: '时间奖励', icon: Clock, type: 'positive' as const, color: 'text-sky-400' },
+  { key: 'accuracyScore', label: '准确率得分', icon: Target, type: 'positive' as const, color: 'text-blue-400' },
+  { key: 'pathScore', label: '路径规划分', icon: MapPin, type: 'positive' as const, color: 'text-indigo-400' },
+  { key: 'mergeBonus', label: '合并订单奖励', icon: Package, type: 'positive' as const, color: 'text-purple-400' },
+  { key: 'nearExpiryBonus', label: '临期品奖励', icon: Zap, type: 'positive' as const, color: 'text-amber-400' },
+  { key: 'restockBonus', label: '补货事件奖励', icon: ShieldAlert, type: 'positive' as const, color: 'text-violet-400' },
+  { key: 'wrongPickPenalty', label: '错拣扣分', icon: XCircle, type: 'negative' as const, color: 'text-rose-400' },
+  { key: 'missedPickPenalty', label: '漏拣扣分', icon: XSquare, type: 'negative' as const, color: 'text-red-400' },
+] as const
+
 export default function ReviewPage() {
-  const { sessionId = 'mock-session-001' } = useParams<{ sessionId: string }>()
+  const { sessionId = 'last' } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
-  const scoreStore = useScoreStore()
+  const getSessionRecord = useScoreStore((s) => s.getSessionRecord)
+  const scoreRecords = useScoreStore((s) => s.scoreRecords)
 
   const [activeTab, setActiveTab] = useState<TabType>('errors')
-  const [data, setData] = useState<MockSessionData | null>(null)
+  const [data, setData] = useState<ReviewSessionData | null>(null)
   const [errorNodes, setErrorNodes] = useState<ErrorNode[]>([])
   const [keyframes, setKeyframes] = useState<Keyframe[]>([])
   const [highlightErrorPos, setHighlightErrorPos] = useState<Position | null>(null)
@@ -567,16 +350,27 @@ export default function ReviewPage() {
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    const mock = generateMockSessionData(sessionId)
-    setData(mock)
-    const nodes = identifyErrorNodes(mock.operations)
-    const frames = extractKeyframes(mock.operations)
+    const record = getSessionRecord(sessionId)
+    if (!record) {
+      setData(null)
+      return
+    }
+
+    const reviewData = convertScoreRecordToReviewData(record)
+    if (!reviewData) {
+      setData(null)
+      return
+    }
+
+    setData(reviewData)
+    const nodes = identifyErrorNodes(reviewData.operations)
+    const frames = extractKeyframes(reviewData.operations)
     setErrorNodes(nodes)
     setKeyframes(frames)
     setPlayTime(0)
     setCurrentLogIdx(0)
     setIsPlaying(false)
-  }, [sessionId])
+  }, [sessionId, getSessionRecord])
 
   useEffect(() => {
     return () => {
@@ -690,6 +484,16 @@ export default function ReviewPage() {
     return tips.slice(0, 3)
   }, [data, errorCounts])
 
+  const scoreBreakdownCalc = useMemo(() => {
+    if (!data) return { totalPositive: 0, totalPenalty: 0, penaltyPct: 0 }
+    const sb = data.scoreBreakdown
+    const totalPositive = sb.baseScore + sb.timeBonus + sb.accuracyScore + sb.pathScore + sb.mergeBonus + sb.nearExpiryBonus + sb.restockBonus
+    const totalPenalty = sb.wrongPickPenalty + sb.missedPickPenalty
+    const totalBase = sb.baseScore + sb.timeBonus + sb.accuracyScore + sb.pathScore
+    const penaltyPct = Math.min(100, (totalPenalty / Math.max(1, totalBase)) * 100)
+    return { totalPositive, totalPenalty, penaltyPct }
+  }, [data])
+
   const formatMs = (ms: number) => {
     const totalSec = Math.floor(ms / 1000)
     const m = Math.floor(totalSec / 60)
@@ -707,6 +511,7 @@ export default function ReviewPage() {
       accuracy: data.accuracy,
       durationMs: data.durationMs,
       abilityScores: data.abilityScores,
+      scoreBreakdown: data.scoreBreakdown,
       errors: errorNodes.map(n => ({
         type: formatErrorType(n.errorType),
         position: n.position,
@@ -746,15 +551,41 @@ export default function ReviewPage() {
     setPlayTime(data.operations[prevIdx].timestamp)
   }
 
+  const handleBack = () => {
+    navigate('/')
+  }
+
+  const handleBackToList = () => {
+    navigate('/')
+  }
+
   if (!data) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-warehouse-navyDark">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-warehouse-navyDark">
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="text-white text-xl"
+          className="text-center"
         >
-          加载复盘数据中...
+          {scoreRecords.length === 0 ? (
+            <>
+              <XCircle size={48} className="mx-auto mb-4 text-warehouse-danger/70" />
+              <div className="text-white text-xl mb-2">暂无复盘记录</div>
+              <div className="text-white/50 text-sm mb-6">完成一局游戏后即可查看复盘数据</div>
+              <button
+                onClick={handleBack}
+                className="flex items-center gap-2 px-6 py-3 rounded-lg bg-warehouse-orange hover:bg-warehouse-orangeDark text-white font-medium transition-all mx-auto"
+              >
+                <Home size={18} />
+                返回主菜单
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="text-white text-xl mb-2">加载复盘数据中...</div>
+              <div className="text-white/50 text-sm">sessionId: {sessionId}</div>
+            </>
+          )}
         </motion.div>
       </div>
     )
@@ -767,13 +598,24 @@ export default function ReviewPage() {
         animate={{ opacity: 1, y: 0 }}
         className="flex flex-wrap items-center gap-3 mb-4"
       >
-        <button
-          onClick={() => navigate(-1)}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-warehouse-navyLight/60 hover:bg-warehouse-navyLight border border-white/10 transition-all"
-        >
-          <ArrowLeft size={18} />
-          <span className="text-sm">返回</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleBack}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-warehouse-navyLight/60 hover:bg-warehouse-navyLight border border-white/10 transition-all"
+          >
+            <Home size={18} />
+            <span className="text-sm">主菜单</span>
+          </button>
+          {sessionId !== 'last' && (
+            <button
+              onClick={handleBackToList}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-warehouse-navyLight/60 hover:bg-warehouse-navyLight border border-white/10 transition-all"
+            >
+              <ArrowLeft size={18} />
+              <span className="text-sm">返回</span>
+            </button>
+          )}
+        </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl md:text-2xl font-bold truncate">{data.levelName}</h1>
@@ -782,6 +624,9 @@ export default function ReviewPage() {
             </span>
             <span className="text-xs px-2 py-1 rounded bg-warehouse-orange/20 text-warehouse-orange border border-warehouse-orange/30">
               用时 {formatMs(data.durationMs)}
+            </span>
+            <span className="text-xs px-2 py-1 rounded bg-white/5 text-white/60 border border-white/10">
+              {data.nickname}
             </span>
           </div>
         </div>
@@ -878,12 +723,13 @@ export default function ReviewPage() {
         className="bg-warehouse-navy/40 rounded-2xl border border-white/5 overflow-hidden"
         style={{ minHeight: '52vh' }}
       >
-        <div className="flex border-b border-white/10 px-2 md:px-4">
+        <div className="flex border-b border-white/10 px-2 md:px-4 overflow-x-auto">
           {(
             [
               { key: 'errors', label: '错误列表', icon: AlertTriangle },
               { key: 'replay', label: '操作回放', icon: Play },
               { key: 'analysis', label: '综合分析', icon: BarChart3 },
+              { key: 'score', label: '分数明细', icon: Coins },
             ] as const
           ).map(tab => {
             const Icon = tab.icon
@@ -893,7 +739,7 @@ export default function ReviewPage() {
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
                 className={cn(
-                  'relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all',
+                  'relative flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all whitespace-nowrap',
                   active ? 'text-warehouse-orange' : 'text-white/60 hover:text-white/90'
                 )}
               >
@@ -1260,31 +1106,37 @@ export default function ReviewPage() {
                       <Clock size={16} className="text-sky-400" />
                       拣货时间分布（秒）
                     </h3>
-                    <div className="h-56">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={data.itemPickTimes} margin={{ top: 5, right: 10, left: -15, bottom: 5 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                          <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} />
-                          <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} />
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#1E3A5F',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              borderRadius: '8px',
-                              fontSize: '12px',
-                            }}
-                          />
-                          <Bar
-                            dataKey="time"
-                            name="耗时(秒)"
-                            fill="#3B82F6"
-                            radius={[4, 4, 0, 0]}
-                            animationBegin={0}
-                            animationDuration={800}
-                          />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
+                    {data.itemPickTimes.length === 0 ? (
+                      <div className="h-56 flex items-center justify-center text-white/40 text-sm">
+                        暂无拣货时间数据
+                      </div>
+                    ) : (
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={data.itemPickTimes} margin={{ top: 5, right: 10, left: -15, bottom: 5 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                            <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} />
+                            <YAxis tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: '#1E3A5F',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                              }}
+                            />
+                            <Bar
+                              dataKey="time"
+                              name="耗时(秒)"
+                              fill="#3B82F6"
+                              radius={[4, 4, 0, 0]}
+                              animationBegin={0}
+                              animationDuration={800}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1314,6 +1166,230 @@ export default function ReviewPage() {
                         </motion.div>
                       )
                     })}
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'score' && (
+              <motion.div
+                key="score"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.25 }}
+                className="space-y-6"
+              >
+                <div className="text-center mb-6">
+                  <div className="text-xs text-white/50 mb-2">最终得分</div>
+                  <motion.div
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ duration: 0.5, type: 'spring' }}
+                    className={cn(
+                      'text-6xl font-bold mb-2',
+                      data.score >= 850 ? 'text-warehouse-success' : data.score >= 700 ? 'text-sky-400' : data.score >= 550 ? 'text-warehouse-warning' : 'text-warehouse-danger'
+                    )}
+                  >
+                    {data.score}
+                  </motion.div>
+                  <div className="text-white/40 text-sm">准确率 {data.accuracy.toFixed(1)}%</div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="md:col-span-2 space-y-3">
+                    <h3 className="text-sm font-semibold flex items-center gap-2">
+                      <Coins size={16} className="text-amber-400" />
+                      得分明细
+                    </h3>
+                    <div className="space-y-2">
+                      {SCORE_DETAIL_ITEMS.map(item => {
+                        const value = data.scoreBreakdown[item.key]
+                        if (value === 0 && (item.key === 'mergeBonus')) return null
+                        const Icon = item.icon
+                        const isPositive = item.type === 'positive'
+
+                        return (
+                          <motion.div
+                            key={item.key}
+                            initial={{ opacity: 0, x: -20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            className="flex items-center justify-between p-3 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                'w-8 h-8 rounded-lg flex items-center justify-center',
+                                isPositive ? 'bg-emerald-500/20' : 'bg-rose-500/20'
+                              )}>
+                                {isPositive
+                                  ? <PlusCircle size={14} className="text-emerald-400" />
+                                  : <MinusCircle size={14} className="text-rose-400" />
+                                }
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Icon size={14} className="text-white/50" />
+                                <span className="text-sm">{item.label}</span>
+                              </div>
+                            </div>
+                            <div className={cn(
+                              'text-lg font-bold font-mono',
+                              isPositive ? 'text-emerald-400' : 'text-rose-400'
+                            )}>
+                              {isPositive ? '+' : '-'}{Math.abs(value)}
+                            </div>
+                          </motion.div>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-xl p-4 bg-white/5 border border-white/10">
+                      <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                        <Gauge size={16} className="text-warehouse-orange" />
+                        分数构成
+                      </h3>
+                      <div className="space-y-3">
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className="text-white/60">奖励分</span>
+                            <span className="text-emerald-400 font-mono">
+                              +{scoreBreakdownCalc.totalPositive}
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: '100%' }}
+                              transition={{ duration: 0.8 }}
+                              className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <div className="flex justify-between text-xs mb-1">
+                            <span className="text-white/60">扣分项</span>
+                            <span className="text-rose-400 font-mono">
+                              -{scoreBreakdownCalc.totalPenalty}
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                            <motion.div
+                              initial={{ width: 0 }}
+                              animate={{ width: `${scoreBreakdownCalc.penaltyPct}%` }}
+                              transition={{ duration: 0.8, delay: 0.2 }}
+                              className="h-full bg-gradient-to-r from-rose-500 to-rose-400 rounded-full"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl p-4 bg-gradient-to-br from-warehouse-orange/10 to-amber-500/5 border border-warehouse-orange/20">
+                      <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+                        <TrendingUp size={16} className="text-warehouse-orange" />
+                        能力雷达
+                      </h3>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5">
+                          <span className="text-white/60">时间效率</span>
+                          <span className={cn(
+                            'font-bold',
+                            data.abilityScores.time >= 80 ? 'text-emerald-400' : data.abilityScores.time >= 60 ? 'text-amber-400' : 'text-rose-400'
+                          )}>
+                            {data.abilityScores.time}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5">
+                          <span className="text-white/60">准确率</span>
+                          <span className={cn(
+                            'font-bold',
+                            data.abilityScores.accuracy >= 80 ? 'text-emerald-400' : data.abilityScores.accuracy >= 60 ? 'text-amber-400' : 'text-rose-400'
+                          )}>
+                            {data.abilityScores.accuracy}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5">
+                          <span className="text-white/60">路径规划</span>
+                          <span className={cn(
+                            'font-bold',
+                            data.abilityScores.pathPlanning >= 80 ? 'text-emerald-400' : data.abilityScores.pathPlanning >= 60 ? 'text-amber-400' : 'text-rose-400'
+                          )}>
+                            {data.abilityScores.pathPlanning}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between p-2 rounded bg-white/5">
+                          <span className="text-white/60">应急处理</span>
+                          <span className={cn(
+                            'font-bold',
+                            data.abilityScores.emergency >= 80 ? 'text-emerald-400' : data.abilityScores.emergency >= 60 ? 'text-amber-400' : 'text-rose-400'
+                          )}>
+                            {data.abilityScores.emergency}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-white/10 overflow-hidden bg-warehouse-navyDark/50">
+                  <div className="px-4 py-3 bg-white/5 border-b border-white/5 text-sm font-semibold flex items-center gap-2">
+                    <BarChart3 size={16} className="text-violet-400" />
+                    分数计算规则
+                  </div>
+                  <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-white/60">
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">基础完成分:</span> 完成关卡基础奖励 200 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-sky-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">时间奖励:</span> 提前完成最多奖励 200 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">准确率得分:</span> 正确操作占比 × 300 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">路径规划分:</span> 最优路径/实际路径 × 200 分
+                        </div>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">临期品奖励:</span> 正确拣取临期品每次 +20 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-violet-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">补货事件奖励:</span> 成功处理补货干扰每次 +15 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-rose-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">错拣扣分:</span> 每次错误操作 -30 分
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-400 mt-1.5 flex-shrink-0" />
+                        <div>
+                          <span className="text-white/80 font-medium">漏拣扣分:</span> 每件漏拣商品 -50 分
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </motion.div>

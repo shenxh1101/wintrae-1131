@@ -188,12 +188,6 @@ export default function TimedLevel() {
   const gameState = useGameStore()
   const grid = useMemo(() => buildGrid(), [])
 
-  useEffect(() => {
-    if (!unlockedLevels.includes(1)) {
-      unlockLevel(1, 'timed')
-    }
-  }, [unlockedLevels, unlockLevel])
-
   const currentLevel = TIMED_LEVELS.find((l) => l.levelId === selectedLevelId) ?? TIMED_LEVELS[0]
 
   const sortedOrders = useMemo(() => {
@@ -806,7 +800,7 @@ export default function TimedLevel() {
       const baseScoreVal = currentLevel.baseScore
 
       const wrongPicks = state.operationLogs.filter((l) => l.action === 'pick' && !l.isCorrect).length
-      const wrongPenalty = wrongPicks * GAME_CONFIG.wrongPickPenalty
+      const wrongPenaltyVal = wrongPicks * GAME_CONFIG.wrongPickPenalty
 
       const completedOrdersArr = state.orders.filter((o) =>
         state.orderItems.filter((oi) => oi.orderId === o.orderId).every((oi) => oi.picked)
@@ -814,7 +808,7 @@ export default function TimedLevel() {
       const orderCompletionBonus = completedOrdersArr.length * 50
 
       const missedItems = state.orderItems.filter((oi) => !oi.picked).length
-      const missPenalty = missedItems * GAME_CONFIG.missPickPenalty
+      const missPenaltyVal = missedItems * GAME_CONFIG.missPickPenalty
 
       const totalScore = Math.max(
         0,
@@ -826,8 +820,8 @@ export default function TimedLevel() {
           eventBonus +
           mergeBonus +
           orderCompletionBonus -
-          wrongPenalty -
-          missPenalty
+          wrongPenaltyVal -
+          missPenaltyVal
       )
 
       const maxPossibleScore =
@@ -855,6 +849,19 @@ export default function TimedLevel() {
       }
       addTrainingTime(Math.round(elapsedMs / 60000))
 
+      const details: ScoreDetailItem[] = [
+        { id: 'base', label: '基础分', value: baseScoreVal, maxValue: currentLevel.baseScore, type: 'positive' },
+        { id: 'order', label: '订单完成奖励', value: orderCompletionBonus, type: 'positive' },
+        { id: 'time', label: '剩余时间奖励(×2)', value: timeBonusVal, maxValue: currentLevel.timeLimitSec * 2, type: 'positive' },
+        { id: 'acc', label: '准确率得分', value: accuracyScoreVal, maxValue: GAME_CONFIG.maxAccuracyScore, type: 'positive' },
+        { id: 'path', label: '路径规划分', value: pathScoreVal, maxValue: GAME_CONFIG.maxPathScore, type: 'positive' },
+        { id: 'merge', label: '批量合并奖励', value: mergeBonus, type: 'positive' },
+        { id: 'near', label: '临期品奖励', value: nearExpiryBonus, type: 'positive' },
+        { id: 'event', label: '应急处理奖励', value: eventBonus, type: 'positive' },
+        { id: 'wrong', label: '误操作扣分', value: wrongPenaltyVal, type: 'negative' },
+        { id: 'miss', label: '漏拣扣分', value: missPenaltyVal, type: 'negative' },
+      ]
+
       const scoreRecord: ScoreType = {
         scoreId: generateId('scr'),
         sessionId: state.sessionId,
@@ -862,10 +869,18 @@ export default function TimedLevel() {
         accuracy: Number(finalAccuracy.toFixed(1)),
         timeBonus: timeBonusVal,
         pathScore: pathScoreVal,
-        penaltyPoints: wrongPenalty + missPenalty,
+        penaltyPoints: wrongPenaltyVal + missPenaltyVal,
         rank: 0,
         nearExpiryBonus,
         raceConditionBonus: eventBonus,
+        operationLogs: [...state.operationLogs],
+        playerPath: [...playerPath],
+        scoreDetails: details,
+        mergeBonus,
+        missPenalty: missPenaltyVal,
+        wrongPenalty: wrongPenaltyVal,
+        levelName: currentLevel.name,
+        completed: completed || anyCompleted,
       }
 
       const session: GameSession = {
@@ -878,30 +893,9 @@ export default function TimedLevel() {
         endTime: new Date().toISOString(),
         status: completed ? 'completed' : anyCompleted ? 'completed' : 'failed',
       }
-      addScoreRecord(scoreRecord, session, nickname)
-
-      const details: ScoreDetailItem[] = [
-        { id: 'base', label: '基础分', value: baseScoreVal, maxValue: currentLevel.baseScore, type: 'positive' },
-        { id: 'order', label: '订单完成奖励', value: orderCompletionBonus, type: 'positive' },
-        { id: 'time', label: '剩余时间奖励(×2)', value: timeBonusVal, maxValue: currentLevel.timeLimitSec * 2, type: 'positive' },
-        { id: 'acc', label: '准确率得分', value: accuracyScoreVal, maxValue: GAME_CONFIG.maxAccuracyScore, type: 'positive' },
-        { id: 'path', label: '路径规划分', value: pathScoreVal, maxValue: GAME_CONFIG.maxPathScore, type: 'positive' },
-        { id: 'merge', label: '批量合并奖励', value: mergeBonus, type: 'positive' },
-        { id: 'near', label: '临期品奖励', value: nearExpiryBonus, type: 'positive' },
-        { id: 'event', label: '应急处理奖励', value: eventBonus, type: 'positive' },
-        { id: 'wrong', label: '误操作扣分', value: wrongPenalty, type: 'negative' },
-        { id: 'miss', label: '漏拣扣分', value: missPenalty, type: 'negative' },
-      ]
+      addScoreRecord(scoreRecord, session, nickname, currentLevel.name)
 
       const unlocks: { id: string; title: string; description: string; icon: 'level' | 'achievement' | 'skin' }[] = []
-      if (anyCompleted && selectedLevelId < TIMED_LEVELS.length && isNewBest) {
-        unlocks.push({
-          id: `lvl-${selectedLevelId + 1}`,
-          title: `解锁关卡 ${selectedLevelId + 1}`,
-          description: TIMED_LEVELS.find((l) => l.levelId === selectedLevelId + 1)?.name ?? '新限时关卡',
-          icon: 'level',
-        })
-      }
 
       setResultData({
         totalScore,
@@ -915,7 +909,7 @@ export default function TimedLevel() {
         pathScore: pathScoreVal,
         nearExpiryBonus,
         raceConditionBonus: eventBonus,
-        penaltyPoints: wrongPenalty + missPenalty,
+        penaltyPoints: wrongPenaltyVal + missPenaltyVal,
         details,
         stars,
         isNewBest,

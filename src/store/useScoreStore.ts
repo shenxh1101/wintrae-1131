@@ -7,14 +7,17 @@ interface ScoreRecord {
   session: GameSession
   nickname: string
   timestamp: string
+  levelName: string
 }
 
 interface ScoreState {
   scoreRecords: ScoreRecord[]
   leaderboard: LeaderboardEntry[]
   isLoadingLeaderboard: boolean
-  addScoreRecord: (score: Score, session: GameSession, nickname: string) => void
+  addScoreRecord: (score: Score, session: GameSession, nickname: string, levelName: string) => void
   getSessionScores: (sessionId: string) => Score | null
+  getSessionRecord: (sessionId: string) => ScoreRecord | null
+  getLatestScoreRecord: () => ScoreRecord | null
   getPlayerScores: (playerId: string) => ScoreRecord[]
   getLevelScores: (levelType: LevelType, levelId: number) => ScoreRecord[]
   getPersonalBest: (playerId: string, levelType: LevelType, levelId: number) => ScoreRecord | null
@@ -64,13 +67,14 @@ export const useScoreStore = create<ScoreState>()(
       leaderboard: [],
       isLoadingLeaderboard: false,
 
-      addScoreRecord: (score: Score, session: GameSession, nickname: string) => {
+      addScoreRecord: (score: Score, session: GameSession, nickname: string, levelName: string) => {
         set((state) => {
           const record: ScoreRecord = {
             score,
             session,
             nickname,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            levelName
           }
           return {
             scoreRecords: [record, ...state.scoreRecords]
@@ -79,8 +83,24 @@ export const useScoreStore = create<ScoreState>()(
       },
 
       getSessionScores: (sessionId: string): Score | null => {
-        const record = get().scoreRecords.find(r => r.session.sessionId === sessionId)
+        const record = get().getSessionRecord(sessionId)
         return record?.score ?? null
+      },
+
+      getSessionRecord: (sessionId: string): ScoreRecord | null => {
+        if (sessionId === 'last') {
+          return get().getLatestScoreRecord()
+        }
+        const record = get().scoreRecords.find(r => r.session.sessionId === sessionId)
+        return record ?? null
+      },
+
+      getLatestScoreRecord: (): ScoreRecord | null => {
+        const records = get().scoreRecords
+        if (records.length === 0) return null
+        return records.reduce((latest, current) => 
+          new Date(current.timestamp) > new Date(latest.timestamp) ? current : latest
+        )
       },
 
       getPlayerScores: (playerId: string): ScoreRecord[] => {
@@ -232,7 +252,9 @@ export const useScoreStore = create<ScoreState>()(
     {
       name: 'warehouse-picking-scores',
       partialize: (state) => ({
-        scoreRecords: state.scoreRecords
+        scoreRecords: state.scoreRecords,
+        leaderboard: state.leaderboard,
+        isLoadingLeaderboard: state.isLoadingLeaderboard
       })
     }
   )

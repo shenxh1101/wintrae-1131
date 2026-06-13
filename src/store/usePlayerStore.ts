@@ -14,6 +14,7 @@ interface PlayerState {
   setNickname: (nickname: string) => void
   setTutorialCompleted: (completed: boolean) => void
   unlockLevel: (levelId: number, levelType: 'order' | 'timed') => void
+  checkAndUnlockTimedLevel: () => void
   addTrainingTime: (minutes: number) => void
   updateBestScore: (key: string, score: number) => void
   updateAchievement: (updates: Partial<Achievement>) => void
@@ -49,7 +50,7 @@ export const usePlayerStore = create<PlayerState>()(
       tutorialCompleted: false,
       achievement: getInitialAchievement(generatePlayerId()),
       unlockedLevels: [],
-      unlockedTimedLevels: [1],
+      unlockedTimedLevels: [],
       totalTrainingMinutes: 0,
       bestScores: {},
 
@@ -66,10 +67,6 @@ export const usePlayerStore = create<PlayerState>()(
         const current = get()[key]
         if (!current.includes(levelId)) {
           set({ [key]: [...current, levelId].sort((a, b) => a - b) } as Partial<PlayerState>)
-        }
-        const nextLevel = levelId + 1
-        if (!current.includes(nextLevel)) {
-          set({ [key]: [...get()[key], nextLevel].sort((a, b) => a - b) } as Partial<PlayerState>)
         }
       },
 
@@ -137,10 +134,17 @@ export const usePlayerStore = create<PlayerState>()(
           tutorialCompleted: false,
           achievement: getInitialAchievement(newPlayerId),
           unlockedLevels: [],
-          unlockedTimedLevels: [1],
+          unlockedTimedLevels: [],
           totalTrainingMinutes: 0,
           bestScores: {}
         })
+      },
+
+      checkAndUnlockTimedLevel: () => {
+        const { unlockedLevels, unlockedTimedLevels } = get()
+        if (unlockedLevels.includes(3) && !unlockedTimedLevels.includes(1)) {
+          set({ unlockedTimedLevels: [...unlockedTimedLevels, 1].sort((a, b) => a - b) })
+        }
       }
     }),
     {
