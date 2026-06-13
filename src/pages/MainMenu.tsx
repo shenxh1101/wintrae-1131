@@ -395,11 +395,17 @@ export default function MainMenu() {
   const [editingNickname, setEditingNickname] = useState(false)
 
   const orderProgress = unlockedLevels.length
-  const timedProgress = unlockedTimedLevels.length
   const reviewCount = scoreRecords.length
 
   const totalOrderLevels = ORDER_LEVELS.length
   const totalTimedLevels = TIMED_LEVELS.length
+
+  const completedOrderLevels = new Set(
+    scoreRecords.filter(r => r.session.levelType === 'order' && r.session.status === 'completed').map(r => r.session.levelId)
+  ).size
+  const completedTimedLevels = new Set(
+    scoreRecords.filter(r => r.session.levelType === 'timed' && r.session.status === 'completed').map(r => r.session.levelId)
+  ).size
 
   const averageScore = getAverageScore(playerId)
   const totalGames = getTotalGames(playerId)
@@ -462,13 +468,20 @@ export default function MainMenu() {
       icon: <ClipboardList className="w-7 h-7" />,
       title: '订单关',
       subtitle: '按订单完成拣货任务',
-      statusText: tutorialCompleted ? '解锁进度' : '完成教学关解锁',
-      progress: orderProgress,
+      statusText: !tutorialCompleted
+        ? '完成教学关解锁'
+        : unlockedLevels.length === 0
+        ? '已解锁 · 准备开始'
+        : completedOrderLevels < totalOrderLevels
+        ? `已通过 ${completedOrderLevels} 关`
+        : '全部通关！',
+      progress: completedOrderLevels,
       maxProgress: totalOrderLevels,
       gradient: 'from-emerald-600/20 to-emerald-900/30',
       glowColor: '#10B981',
       borderColor: '#10B981',
       locked: !tutorialCompleted,
+      completed: completedOrderLevels >= totalOrderLevels,
       iconBg: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
       onClick: () => navigate('/order')
     },
@@ -477,13 +490,20 @@ export default function MainMenu() {
       icon: <Timer className="w-7 h-7" />,
       title: '限时关',
       subtitle: '时间压力下的效率考验',
-      statusText: unlockedLevels.includes(3) ? '解锁进度' : '完成订单关L3解锁',
-      progress: timedProgress,
+      statusText: !unlockedLevels.includes(3)
+        ? '完成订单关L3解锁'
+        : unlockedTimedLevels.length === 0
+        ? '已解锁 · 准备开始'
+        : completedTimedLevels < totalTimedLevels
+        ? `已通过 ${completedTimedLevels} 关`
+        : '全部通关！',
+      progress: completedTimedLevels,
       maxProgress: totalTimedLevels,
       gradient: 'from-orange-600/20 to-orange-900/30',
       glowColor: '#F59E0B',
       borderColor: '#F59E0B',
       locked: !unlockedLevels.includes(3),
+      completed: completedTimedLevels >= totalTimedLevels,
       iconBg: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
       onClick: () => unlockedLevels.includes(3) && navigate('/timed')
     },
@@ -500,7 +520,7 @@ export default function MainMenu() {
       borderColor: '#8B5CF6',
       locked: scoreRecords.length === 0,
       iconBg: 'bg-purple-500/20 text-purple-400 border border-purple-500/30',
-      onClick: () => scoreRecords.length > 0 && navigate('/review')
+      onClick: () => scoreRecords.length > 0 && navigate('/review/last')
     },
     {
       key: 'leaderboard',
@@ -755,7 +775,7 @@ export default function MainMenu() {
                       className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-cyan-400"
                       style={{
                         width: tutorialCompleted
-                          ? `${(orderProgress / totalOrderLevels) * 100}%`
+                          ? `${(completedOrderLevels / totalOrderLevels) * 100}%`
                           : '0%'
                       }}
                     />

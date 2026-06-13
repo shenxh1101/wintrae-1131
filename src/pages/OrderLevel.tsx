@@ -604,6 +604,9 @@ export default function OrderLevel() {
 
       if (completed) {
         unlockLevel(selectedLevelId, 'order')
+        if (selectedLevelId < ORDER_LEVELS.length) {
+          unlockLevel(selectedLevelId + 1, 'order')
+        }
         checkAndUnlockTimedLevel()
       }
       if (isNewBest) {

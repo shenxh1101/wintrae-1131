@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -9,6 +9,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useScoreStore } from '@/store/useScoreStore'
 import { usePlayerStore } from '@/store/usePlayerStore'
+import { useReviewListState } from '@/store/useReviewListState'
 import { ORDER_LEVELS, TIMED_LEVELS } from '@/data/mockData'
 import type { LevelType } from '@/types'
 import { getScoreRank } from '@/utils/scoreCalculator'
@@ -174,9 +175,11 @@ function FilterDropdown({
 function ReviewCard({
   record,
   index,
+  onNavigate,
 }: {
   record: ReturnType<typeof useScoreStore.getState>['scoreRecords'][0]
   index: number
+  onNavigate: () => void
 }) {
   const navigate = useNavigate()
   const { session, score, timestamp } = record
@@ -193,7 +196,10 @@ function ReviewCard({
       custom={index}
       whileHover={{ y: -4, scale: 1.01 }}
       whileTap={{ scale: 0.99 }}
-      onClick={() => navigate(`/review/${session.sessionId}`)}
+      onClick={() => {
+        onNavigate()
+        navigate(`/review/${session.sessionId}`, { state: { from: 'list' } })
+      }}
       className="relative rounded-2xl bg-warehouse-navy/40 border border-white/10 hover:border-warehouse-orange/40 p-5 cursor-pointer transition-all group overflow-hidden"
     >
       <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
@@ -402,8 +408,34 @@ export default function ReviewList() {
   const navigate = useNavigate()
   const playerId = usePlayerStore(s => s.playerId)
   const { scoreRecords, getPlayerScores } = useScoreStore()
-  const [filterType, setFilterType] = useState<FilterType>('all')
-  const [searchQuery, setSearchQuery] = useState('')
+  const { filterType: storedFilterType, searchQuery: storedSearchQuery, scrollTop: storedScrollTop, setFilterType: storeSetFilterType, setSearchQuery: storeSetSearchQuery, setScrollTop: storeSetScrollTop } = useReviewListState()
+  const [filterType, setFilterType] = useState<FilterType>(storedFilterType as FilterType)
+  const [searchQuery, setSearchQuery] = useState(storedSearchQuery)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scrollRestored = useRef(false)
+
+  const handleFilterChange = (v: FilterType) => {
+    setFilterType(v)
+    storeSetFilterType(v)
+  }
+
+  const handleSearchChange = (v: string) => {
+    setSearchQuery(v)
+    storeSetSearchQuery(v)
+  }
+
+  const handleCardNavigate = () => {
+    if (scrollRef.current) {
+      storeSetScrollTop(scrollRef.current.scrollTop)
+    }
+  }
+
+  useEffect(() => {
+    if (!scrollRestored.current && scrollRef.current && storedScrollTop > 0) {
+      scrollRef.current.scrollTop = storedScrollTop
+      scrollRestored.current = true
+    }
+  }, [storedScrollTop])
 
   const playerRecords = useMemo(() => {
     const records = getPlayerScores(playerId)
@@ -448,7 +480,7 @@ export default function ReviewList() {
   }, [playerRecords])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-warehouse-navyDark via-warehouse-navy to-warehouse-navyDark text-white">
+    <div ref={scrollRef} className="min-h-screen bg-gradient-to-br from-warehouse-navyDark via-warehouse-navy to-warehouse-navyDark text-white overflow-y-auto">
       <div className="max-w-5xl mx-auto p-4 md:p-6">
         <motion.header
           variants={headerVariants}
@@ -528,7 +560,7 @@ export default function ReviewList() {
             <input
               type="text"
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={e => handleSearchChange(e.target.value)}
               placeholder="搜索关卡名称或分数..."
               className="w-full pl-9 pr-4 py-2 rounded-lg bg-white/5 border border-white/10 text-sm text-white placeholder-white/30 focus:outline-none focus:border-warehouse-orange/50 focus:bg-white/8 transition-all"
             />
@@ -536,7 +568,7 @@ export default function ReviewList() {
 
           <FilterDropdown
             value={filterType}
-            onChange={setFilterType}
+            onChange={handleFilterChange}
             options={FILTER_OPTIONS}
           />
 
@@ -610,7 +642,7 @@ export default function ReviewList() {
               className="space-y-3"
             >
               {filteredRecords.map((record, index) => (
-                <ReviewCard key={record.score.scoreId} record={record} index={index} />
+                <ReviewCard key={record.score.scoreId} record={record} index={index} onNavigate={handleCardNavigate} />
               ))}
             </motion.div>
           )}

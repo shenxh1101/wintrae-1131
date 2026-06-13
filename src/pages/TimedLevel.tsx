@@ -844,6 +844,9 @@ export default function TimedLevel() {
       if (completed || anyCompleted) {
         unlockLevel(selectedLevelId, 'timed')
       }
+      if (completed && selectedLevelId < TIMED_LEVELS.length) {
+        unlockLevel(selectedLevelId + 1, 'timed')
+      }
       if (isNewBest) {
         updateBestScore(bestKey, totalScore)
       }

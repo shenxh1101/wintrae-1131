@@ -1126,6 +1126,15 @@ export default function TutorialLevel() {
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
+                      onClick={() => navigate(`/review/${completedSessionId}`)}
+                      className="w-full py-3.5 rounded-xl font-semibold text-warehouse-orange bg-warehouse-orange/10 border border-warehouse-orange/30 hover:bg-warehouse-orange/20 flex items-center justify-center gap-2 transition-all"
+                    >
+                      <Search size={18} />
+                      查看本局复盘
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
                       onClick={() => navigate('/')}
                       className="w-full py-3.5 rounded-xl font-semibold text-gray-300 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white flex items-center justify-center gap-2 transition-all"
                     >

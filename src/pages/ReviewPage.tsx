@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Download, AlertTriangle, XCircle, Package, ListOrdered,
   Play, Pause, SkipBack, SkipForward, Bookmark, BarChart3, Target,
   Clock, CheckCircle2, XSquare, TrendingUp, Lightbulb, Gauge,
-  MapPin, Zap, Brain, ShieldAlert, Coins, MinusCircle, PlusCircle, Home
+  MapPin, Zap, Brain, ShieldAlert, Coins, MinusCircle, PlusCircle, Home,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Filter
 } from 'lucide-react'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -28,9 +29,10 @@ import {
 } from '@/utils/replayUtils'
 import {
   convertScoreRecordToReviewData,
+  getLevelName,
   type ReviewSessionData,
 } from '@/utils/reviewDataConverter'
-import type { Position } from '@/types'
+import type { Position, LevelType } from '@/types'
 
 const CELL_SIZE = 32
 const GRID_WIDTH = 20
@@ -45,7 +47,7 @@ const AREA_COLORS: Record<string, string> = {
   'D区': '#F59E0B',
 }
 
-type TabType = 'errors' | 'replay' | 'analysis' | 'score'
+type TabType = 'errors' | 'replay' | 'analysis' | 'orders' | 'score'
 
 interface ReviewMapProps {
   type: 'player' | 'optimal'
@@ -334,6 +336,7 @@ const SCORE_DETAIL_ITEMS = [
 export default function ReviewPage() {
   const { sessionId = 'last' } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const getSessionRecord = useScoreStore((s) => s.getSessionRecord)
   const scoreRecords = useScoreStore((s) => s.scoreRecords)
 
@@ -348,6 +351,28 @@ export default function ReviewPage() {
   const [playTime, setPlayTime] = useState(0)
   const [currentLogIdx, setCurrentLogIdx] = useState(0)
   const playIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const [showRecordSwitcher, setShowRecordSwitcher] = useState(false)
+  const [recordFilter, setRecordFilter] = useState<'all' | LevelType>('all')
+  const switcherRef = useRef<HTMLDivElement>(null)
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (location.pathname === '/review') {
+      navigate('/review/last', { replace: true })
+    }
+  }, [location.pathname, navigate])
+
+  useEffect(() => {
+    if (!showRecordSwitcher) return
+    const handleClickOutside = (e: MouseEvent) => {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setShowRecordSwitcher(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showRecordSwitcher])
 
   useEffect(() => {
     const record = getSessionRecord(sessionId)
@@ -494,11 +519,132 @@ export default function ReviewPage() {
     return { totalPositive, totalPenalty, penaltyPct }
   }, [data])
 
+  const orderViewData = useMemo(() => {
+    if (!data) return []
+
+    const orderMap = new Map<string, {
+      orderId: string
+      items: Map<string, {
+        sku: string
+        productName: string
+        locationId: string
+        requiredQty: number
+        pickedQty: number
+        status: 'completed' | 'wrong' | 'missed' | 'partial'
+        steps: { action: string; timestamp: number; isCorrect: boolean; detail: string }[]
+        isNearExpiry: boolean
+        nearExpiryBonus: number
+        affectedByRestock: boolean
+        affectedByMerge: boolean
+        errorType?: string
+      }>
+    }>()
+
+    data.operations.forEach(log => {
+      const oid = log.payload.orderId
+      if (!oid) return
+
+      if (!orderMap.has(oid)) {
+        orderMap.set(oid, { orderId: oid, items: new Map() })
+      }
+      const order = orderMap.get(oid)!
+      const sku = log.payload.sku || 'unknown'
+
+      if (log.action === 'pick' && log.isCorrect) {
+        if (!order.items.has(sku)) {
+          order.items.set(sku, {
+            sku, productName: log.payload.productName || sku,
+            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
+            pickedQty: 0, status: 'completed', steps: [],
+            isNearExpiry: log.payload.isNearExpiry || false,
+            nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false
+          })
+        }
+        const item = order.items.get(sku)!
+        item.pickedQty += log.payload.quantity || 1
+        item.steps.push({ action: 'pick', timestamp: log.timestamp, isCorrect: true, detail: `拣取 ${log.payload.productName || sku}` })
+        if (log.payload.isNearExpiry) item.nearExpiryBonus = 20
+      }
+
+      if (log.action === 'pick' && !log.isCorrect) {
+        if (!order.items.has(sku)) {
+          order.items.set(sku, {
+            sku, productName: log.payload.productName || sku,
+            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
+            pickedQty: 0, status: 'wrong', steps: [],
+            isNearExpiry: false, nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false,
+            errorType: log.errorType
+          })
+        }
+        const item = order.items.get(sku)!
+        item.status = 'wrong'
+        item.steps.push({ action: 'error', timestamp: log.timestamp, isCorrect: false, detail: `错误: ${log.errorType || '未知'}` })
+      }
+
+      if (log.action === 'scan' && log.isCorrect) {
+        if (!order.items.has(sku)) {
+          order.items.set(sku, {
+            sku, productName: log.payload.productName || sku,
+            locationId: log.payload.locationId || '', requiredQty: log.payload.requiredQuantity || 1,
+            pickedQty: 0, status: 'missed', steps: [],
+            isNearExpiry: log.payload.isNearExpiry || false,
+            nearExpiryBonus: 0, affectedByRestock: false, affectedByMerge: false
+          })
+        }
+        const item = order.items.get(sku)!
+        item.steps.push({ action: 'scan', timestamp: log.timestamp, isCorrect: true, detail: `扫描 ${log.payload.locationId}` })
+      }
+
+      if (log.action === 'restock') {
+        order.items.forEach(item => {
+          if (log.payload.lockedLocations?.includes(item.locationId)) {
+            item.affectedByRestock = true
+            item.steps.push({ action: 'restock', timestamp: log.timestamp, isCorrect: true, detail: `补货干扰: ${item.locationId}` })
+          }
+        })
+      }
+    })
+
+    return Array.from(orderMap.entries()).map(([orderId, order]) => ({
+      orderId,
+      items: Array.from(order.items.values()),
+    }))
+  }, [data])
+
   const formatMs = (ms: number) => {
     const totalSec = Math.floor(ms / 1000)
     const m = Math.floor(totalSec / 60)
     const s = totalSec % 60
     return `${m}:${String(s).padStart(2, '0')}`
+  }
+
+  const filteredRecords = useMemo(() => {
+    if (recordFilter === 'all') return scoreRecords
+    return scoreRecords.filter(r => r.session.levelType === recordFilter)
+  }, [scoreRecords, recordFilter])
+
+  const currentRecordIndex = useMemo(() => {
+    if (!data) return -1
+    return filteredRecords.findIndex(r => r.session.sessionId === data.sessionId)
+  }, [data, filteredRecords])
+
+  const switchToRecord = (targetSessionId: string) => {
+    setShowRecordSwitcher(false)
+    navigate(`/review/${targetSessionId}`)
+  }
+
+  const switchToPrev = () => {
+    if (currentRecordIndex < filteredRecords.length - 1) {
+      const prev = filteredRecords[currentRecordIndex + 1]
+      switchToRecord(prev.session.sessionId)
+    }
+  }
+
+  const switchToNext = () => {
+    if (currentRecordIndex > 0) {
+      const next = filteredRecords[currentRecordIndex - 1]
+      switchToRecord(next.session.sessionId)
+    }
   }
 
   const handleExportReport = () => {
@@ -556,7 +702,8 @@ export default function ReviewPage() {
   }
 
   const handleBackToList = () => {
-    navigate('/')
+    const from = (location.state as { from?: string } | null)?.from
+    navigate(from === 'list' ? '/review' : '/')
   }
 
   if (!data) {
@@ -638,6 +785,159 @@ export default function ReviewPage() {
           导出报告
         </button>
       </motion.header>
+
+      {scoreRecords.length > 1 && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.05 }}
+          className="relative mb-4"
+          ref={switcherRef}
+        >
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-warehouse-navyLight/40 border border-white/10">
+            <button
+              onClick={switchToPrev}
+              disabled={currentRecordIndex < 0 || currentRecordIndex >= filteredRecords.length - 1}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={14} />
+              上一局
+            </button>
+
+            <div className="flex-1 min-w-0 flex items-center justify-center gap-2 text-sm">
+              <span className="text-white/80 font-medium truncate">
+                {data ? getLevelName(data.levelType, data.levelId) : '—'}
+              </span>
+              <span className="text-warehouse-orange font-bold">
+                {data ? data.score : '—'}分
+              </span>
+              {currentRecordIndex >= 0 && (
+                <span className="text-xs text-white/40">
+                  ({currentRecordIndex + 1}/{filteredRecords.length})
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={switchToNext}
+              disabled={currentRecordIndex <= 0}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              下一局
+              <ChevronRight size={14} />
+            </button>
+
+            <div className="w-px h-5 bg-white/10 mx-1" />
+
+            <button
+              onClick={() => setShowRecordSwitcher(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all',
+                showRecordSwitcher
+                  ? 'bg-warehouse-orange/20 border-warehouse-orange/40 text-warehouse-orange'
+                  : 'bg-white/5 hover:bg-white/10 border-white/10'
+              )}
+            >
+              <Filter size={13} />
+              历史列表
+              {showRecordSwitcher ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+            </button>
+          </div>
+
+          <AnimatePresence>
+            {showRecordSwitcher && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, height: 0 }}
+                animate={{ opacity: 1, y: 0, height: 'auto' }}
+                exit={{ opacity: 0, y: -8, height: 0 }}
+                transition={{ duration: 0.2 }}
+                className="absolute top-full left-0 right-0 z-30 mt-1 rounded-xl bg-warehouse-navyDark border border-white/15 shadow-xl shadow-black/40 overflow-hidden"
+              >
+                <div className="flex items-center gap-1 px-3 py-2 border-b border-white/10 bg-white/5">
+                  {(['all', 'tutorial', 'order', 'timed'] as const).map(ft => {
+                    const labels: Record<string, string> = {
+                      all: '全部',
+                      tutorial: '教学关',
+                      order: '订单关',
+                      timed: '限时关',
+                    }
+                    const active = recordFilter === ft
+                    return (
+                      <button
+                        key={ft}
+                        onClick={() => setRecordFilter(ft)}
+                        className={cn(
+                          'px-2.5 py-1 text-xs rounded-md font-medium transition-colors',
+                          active
+                            ? 'bg-warehouse-orange/80 text-white'
+                            : 'text-white/50 hover:text-white/80 hover:bg-white/10'
+                        )}
+                      >
+                        {labels[ft]}
+                      </button>
+                    )
+                  })}
+                  <span className="ml-auto text-xs text-white/30">
+                    {filteredRecords.length} 条记录
+                  </span>
+                </div>
+
+                <div className="max-h-[280px] overflow-y-auto divide-y divide-white/5">
+                  {filteredRecords.length === 0 ? (
+                    <div className="p-6 text-center text-white/30 text-sm">暂无记录</div>
+                  ) : (
+                    filteredRecords.map((record, idx) => {
+                      const isCurrent = data && record.session.sessionId === data.sessionId
+                      const lvlName = getLevelName(record.session.levelType, record.session.levelId)
+                      const status = record.score.completed ? '通关' : '未完成'
+                      const statusColor = record.score.completed ? 'text-warehouse-success' : 'text-warehouse-warning'
+                      return (
+                        <button
+                          key={record.session.sessionId}
+                          onClick={() => switchToRecord(record.session.sessionId)}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
+                            isCurrent
+                              ? 'bg-warehouse-orange/15 border-l-2 border-warehouse-orange'
+                              : 'hover:bg-white/5 border-l-2 border-transparent'
+                          )}
+                        >
+                          <span className="text-xs text-white/30 w-6 text-right flex-shrink-0">
+                            {idx + 1}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={cn(
+                                'text-sm font-medium truncate',
+                                isCurrent ? 'text-warehouse-orange' : 'text-white/90'
+                              )}>
+                                {lvlName}
+                              </span>
+                              <span className={cn('text-xs', statusColor)}>
+                                {status}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-white/40 mt-0.5">
+                              <span>{record.score.totalScore}分</span>
+                              <span>用时{formatMs(record.session.durationMs)}</span>
+                              <span>准确率{record.score.accuracy.toFixed(0)}%</span>
+                            </div>
+                          </div>
+                          {isCurrent && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-warehouse-orange/20 text-warehouse-orange font-medium flex-shrink-0">
+                              当前
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })
+                  )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
 
       <motion.section
         initial={{ opacity: 0, y: 20 }}
@@ -729,6 +1029,7 @@ export default function ReviewPage() {
               { key: 'errors', label: '错误列表', icon: AlertTriangle },
               { key: 'replay', label: '操作回放', icon: Play },
               { key: 'analysis', label: '综合分析', icon: BarChart3 },
+              { key: 'orders', label: '订单视角', icon: ListOrdered },
               { key: 'score', label: '分数明细', icon: Coins },
             ] as const
           ).map(tab => {
@@ -1168,6 +1469,200 @@ export default function ReviewPage() {
                     })}
                   </div>
                 </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'orders' && (
+              <motion.div
+                key="orders"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.25 }}
+                className="space-y-4"
+              >
+                {orderViewData.length === 0 ? (
+                  <div className="p-10 text-center text-white/40">
+                    <ListOrdered size={40} className="mx-auto mb-3 text-white/20" />
+                    <div className="text-lg mb-1">该关卡无订单数据</div>
+                    <div className="text-sm">教学关等非订单关卡不提供订单视角分析</div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-3 gap-3">
+                      {(() => {
+                        const totalOrders = orderViewData.length
+                        const completedOrders = orderViewData.filter(o => o.items.every(it => it.status === 'completed')).length
+                        const errorOrders = orderViewData.filter(o => o.items.some(it => it.status === 'wrong' || it.status === 'missed')).length
+                        return [
+                          { label: '总订单数', value: totalOrders, icon: ListOrdered, color: 'text-sky-400', bg: 'bg-sky-500/15 border-sky-500/30' },
+                          { label: '完成订单', value: completedOrders, icon: CheckCircle2, color: 'text-emerald-400', bg: 'bg-emerald-500/15 border-emerald-500/30' },
+                          { label: '出错订单', value: errorOrders, icon: XCircle, color: 'text-rose-400', bg: 'bg-rose-500/15 border-rose-500/30' },
+                        ].map(stat => {
+                          const Icon = stat.icon
+                          return (
+                            <div key={stat.label} className={cn('rounded-xl p-3 border', stat.bg)}>
+                              <div className="flex items-center gap-2 mb-1">
+                                <Icon size={16} className={stat.color} />
+                                <span className="text-xs text-white/60">{stat.label}</span>
+                              </div>
+                              <div className={cn('text-2xl font-bold', stat.color)}>{stat.value}</div>
+                            </div>
+                          )
+                        })
+                      })()}
+                    </div>
+
+                    <div className="space-y-3">
+                      {orderViewData.map(order => {
+                        const isExpanded = expandedOrders.has(order.orderId)
+                        const completedCount = order.items.filter(it => it.status === 'completed').length
+                        const errorCount = order.items.filter(it => it.status === 'wrong' || it.status === 'missed').length
+                        const partialCount = order.items.filter(it => it.status === 'partial').length
+
+                        return (
+                          <div key={order.orderId} className="rounded-xl border border-white/10 bg-warehouse-navyDark/50 overflow-hidden">
+                            <button
+                              onClick={() => {
+                                setExpandedOrders(prev => {
+                                  const next = new Set(prev)
+                                  if (next.has(order.orderId)) next.delete(order.orderId)
+                                  else next.add(order.orderId)
+                                  return next
+                                })
+                              }}
+                              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors text-left"
+                            >
+                              {isExpanded ? <ChevronUp size={16} className="text-white/40" /> : <ChevronDown size={16} className="text-white/40" />}
+                              <Package size={16} className="text-warehouse-orange" />
+                              <span className="text-sm font-semibold">订单 #{order.orderId}</span>
+                              <span className="text-xs text-white/50">{order.items.length} 件商品</span>
+                              <div className="ml-auto flex items-center gap-2">
+                                {completedCount > 0 && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                    {completedCount} 完成
+                                  </span>
+                                )}
+                                {errorCount > 0 && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                                    {errorCount} 出错
+                                  </span>
+                                )}
+                                {partialCount > 0 && (
+                                  <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                                    {partialCount} 部分
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+
+                            {isExpanded && (
+                              <motion.div
+                                initial={{ height: 0, opacity: 0 }}
+                                animate={{ height: 'auto', opacity: 1 }}
+                                exit={{ height: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="border-t border-white/5"
+                              >
+                                <div className="p-3 space-y-3">
+                                  {order.items.map(item => {
+                                    const statusConfig: Record<string, { label: string; color: string; bg: string; icon: typeof CheckCircle2 }> = {
+                                      completed: { label: '已完成', color: 'text-emerald-400', bg: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30', icon: CheckCircle2 },
+                                      wrong: { label: '错拣', color: 'text-rose-400', bg: 'bg-rose-500/20 text-rose-400 border-rose-500/30', icon: XCircle },
+                                      missed: { label: '漏拣', color: 'text-red-400', bg: 'bg-red-500/20 text-red-400 border-red-500/30', icon: XSquare },
+                                      partial: { label: '部分完成', color: 'text-amber-400', bg: 'bg-amber-500/20 text-amber-400 border-amber-500/30', icon: AlertTriangle },
+                                    }
+                                    const st = statusConfig[item.status] || statusConfig.completed
+                                    const StatusIcon = st.icon
+
+                                    return (
+                                      <div key={item.sku} className="rounded-lg p-3 bg-white/5 border border-white/5">
+                                        <div className="flex items-start justify-between mb-2">
+                                          <div className="flex items-center gap-2">
+                                            <StatusIcon size={16} className={st.color} />
+                                            <span className="text-sm font-medium">{item.productName}</span>
+                                            <span className="text-xs text-white/40 font-mono">{item.sku}</span>
+                                          </div>
+                                          <span className={cn('text-xs px-2 py-0.5 rounded-full border', st.bg)}>
+                                            {st.label}
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-4 text-xs text-white/50 mb-2">
+                                          <span className="flex items-center gap-1">
+                                            <MapPin size={12} />
+                                            {item.locationId || '—'}
+                                          </span>
+                                          <span>
+                                            拣取 {item.pickedQty}/{item.requiredQty}
+                                          </span>
+                                        </div>
+
+                                        {item.steps.length > 0 && (
+                                          <div className="mt-2 space-y-1">
+                                            {item.steps.map((step, si) => (
+                                              <div key={si} className="flex items-center gap-2 text-xs">
+                                                <span className="text-white/30 font-mono w-12">{formatMs(step.timestamp)}</span>
+                                                <span className={cn(
+                                                  'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                                                  step.isCorrect ? 'bg-emerald-400' : 'bg-rose-400'
+                                                )} />
+                                                <span className={cn(
+                                                  step.action === 'error' ? 'text-rose-400' :
+                                                  step.action === 'restock' ? 'text-violet-400' :
+                                                  'text-white/60'
+                                                )}>
+                                                  {step.detail}
+                                                </span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+
+                                        <div className="flex flex-wrap gap-1.5 mt-2">
+                                          {item.isNearExpiry && (
+                                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                                              <Zap size={11} />
+                                              临期品+20分
+                                            </span>
+                                          )}
+                                          {item.affectedByRestock && (
+                                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 border border-violet-500/25">
+                                              <ShieldAlert size={11} />
+                                              补货干扰
+                                            </span>
+                                          )}
+                                          {item.affectedByMerge && (
+                                            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-400 border border-sky-500/25">
+                                              <Package size={11} />
+                                              合并策略
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {item.errorType && (
+                                          <div className="mt-2 p-2 rounded-md bg-rose-500/10 border border-rose-500/20 text-xs">
+                                            <div className="flex items-center gap-1 text-rose-400 font-medium mb-0.5">
+                                              <XCircle size={12} />
+                                              错误类型: {item.errorType}
+                                            </div>
+                                            <div className="text-white/50">
+                                              建议: 请仔细核对商品 SKU 和货位信息，确认后再进行拣取操作
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              </motion.div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </>
+                )}
               </motion.div>
             )}
 
