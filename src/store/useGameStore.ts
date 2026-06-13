@@ -82,15 +82,16 @@ interface GameState {
   getToteTotalQuantity: () => number
   isAtCheckout: () => boolean
   isAllOrdersCompleted: () => boolean
+  getSessionData: () => { operationLogs: OperationLog[]; eventList: GameEvent[]; sessionId: string }
 }
 
 const generateId = (prefix: string): string => {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-const createInitialState = (): Omit<GameState, never> => ({
+const createInitialState = () => ({
   sessionId: '',
-  levelType: 'tutorial',
+  levelType: 'tutorial' as const,
   levelId: 1,
   playerPosition: { ...START_POSITION },
   targetLocationId: null,
@@ -570,5 +571,14 @@ export const useGameStore = create<GameState>()((set, get) => ({
     return state.orderItems
       .filter(oi => allOrderIds.includes(oi.orderId))
       .every(oi => oi.picked)
+  },
+
+  getSessionData: () => {
+    const state = get()
+    return {
+      operationLogs: [...state.operationLogs],
+      eventList: [...state.eventList],
+      sessionId: state.sessionId
+    }
   }
 }))

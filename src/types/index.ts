@@ -121,6 +121,8 @@ export interface Score {
   rank: number;
   nearExpiryBonus?: number;
   raceConditionBonus?: number;
+  operationLogs?: OperationLog[];
+  playerPath?: Position[];
 }
 
 export interface Achievement {

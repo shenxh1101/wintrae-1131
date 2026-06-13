@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -8,11 +8,12 @@ import {
 import WarehouseMap from '@/components/WarehouseMap'
 import { useGameStore } from '@/store/useGameStore'
 import { usePlayerStore } from '@/store/usePlayerStore'
+import { useScoreStore } from '@/store/useScoreStore'
 import {
   TUTORIAL_STEPS, SHELVES, LOCATIONS, STOCK_ITEMS,
   getLocationById, getStockByLocation, getProductBySku
 } from '@/data/mockData'
-import type { Order, OrderItem } from '@/types'
+import type { Order, OrderItem, Score, GameSession } from '@/types'
 import { cn, generateId } from '@/lib/utils'
 
 interface KnowledgePopupProps {
@@ -306,7 +307,13 @@ export default function TutorialLevel() {
     setLevel, setStocks, setOrders, getNearbyLocation, isAtCheckout,
     toteItems, getCurrentOrderItems
   } = useGameStore()
-  const { unlockLevel } = usePlayerStore()
+  const {
+    playerId, nickname, tutorialCompleted,
+    setTutorialCompleted, unlockLevel, updateAchievement,
+    addTrainingTime, updateBestScore
+  } = usePlayerStore()
+  const { addScoreRecord } = useScoreStore()
+  const startTimeRef = useRef<number>(Date.now())
 
   const [showKnowledge, setShowKnowledge] = useState(true)
   const [scanAnimation, setScanAnimation] = useState(false)
@@ -353,6 +360,7 @@ export default function TutorialLevel() {
     startGame()
     setTutorialStepIndex(0)
     setShowKnowledge(true)
+    startTimeRef.current = Date.now()
   }, [])
 
   useEffect(() => {
@@ -414,15 +422,55 @@ export default function TutorialLevel() {
 
     setTimeout(() => {
       if (tutorialStepIndex >= TUTORIAL_STEPS.length - 1) {
-        setAllDone(true)
+        const durationMs = Date.now() - startTimeRef.current
+        const trainingMinutes = Math.max(1, Math.ceil(durationMs / 60000))
+
+        setTutorialCompleted(true)
         unlockLevel(1, 'order')
+        unlockLevel(1, 'timed')
+        updateAchievement({ totalGames: (usePlayerStore.getState().achievement.totalGames || 0) + 1 })
+        addTrainingTime(trainingMinutes)
+
+        const sessionId = generateId('ses')
+        const scoreId = generateId('scr')
+
+        const gameSession: GameSession = {
+          sessionId,
+          playerId,
+          levelType: 'tutorial',
+          levelId: 1,
+          durationMs,
+          startTime: new Date(startTimeRef.current).toISOString(),
+          endTime: new Date().toISOString(),
+          status: 'completed'
+        }
+
+        const score: Score = {
+          scoreId,
+          sessionId,
+          totalScore: 500,
+          accuracy: 100,
+          timeBonus: 100,
+          pathScore: 80,
+          penaltyPoints: 0,
+          rank: 1
+        }
+
+        addScoreRecord(score, gameSession, nickname)
+        updateBestScore('tutorial-1', 500)
+
+        setAllDone(true)
+
+        setTimeout(() => {
+          navigate('/')
+        }, 2000)
       } else {
         nextTutorialStep()
         setStepCompleted(false)
         setShowKnowledge(true)
       }
     }, 1200)
-  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, unlockLevel])
+  }, [tutorialStepIndex, stepCompleted, currentStep, showNotification, nextTutorialStep, setTutorialCompleted, unlockLevel, updateAchievement, addTrainingTime, addScoreRecord, updateBestScore, playerId, nickname, navigate])
 
   const handleScan = useCallback(() => {
     if (scanAnimation || showKnowledge || allDone || stepCompleted) return

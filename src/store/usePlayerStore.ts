@@ -5,12 +5,14 @@ import type { Achievement, AbilityDimension } from '../types'
 interface PlayerState {
   playerId: string
   nickname: string
+  tutorialCompleted: boolean
   achievement: Achievement
   unlockedLevels: number[]
   unlockedTimedLevels: number[]
   totalTrainingMinutes: number
   bestScores: Record<string, number>
   setNickname: (nickname: string) => void
+  setTutorialCompleted: (completed: boolean) => void
   unlockLevel: (levelId: number, levelType: 'order' | 'timed') => void
   addTrainingTime: (minutes: number) => void
   updateBestScore: (key: string, score: number) => void
@@ -44,14 +46,19 @@ export const usePlayerStore = create<PlayerState>()(
     (set, get) => ({
       playerId: generatePlayerId(),
       nickname: '新玩家',
+      tutorialCompleted: false,
       achievement: getInitialAchievement(generatePlayerId()),
-      unlockedLevels: [1],
+      unlockedLevels: [],
       unlockedTimedLevels: [1],
       totalTrainingMinutes: 0,
       bestScores: {},
 
       setNickname: (nickname: string) => {
         set({ nickname })
+      },
+
+      setTutorialCompleted: (completed: boolean) => {
+        set({ tutorialCompleted: completed })
       },
 
       unlockLevel: (levelId: number, levelType: 'order' | 'timed') => {
@@ -127,8 +134,9 @@ export const usePlayerStore = create<PlayerState>()(
         set({
           playerId: newPlayerId,
           nickname: '新玩家',
+          tutorialCompleted: false,
           achievement: getInitialAchievement(newPlayerId),
-          unlockedLevels: [1],
+          unlockedLevels: [],
           unlockedTimedLevels: [1],
           totalTrainingMinutes: 0,
           bestScores: {}
@@ -140,6 +148,7 @@ export const usePlayerStore = create<PlayerState>()(
       partialize: (state) => ({
         playerId: state.playerId,
         nickname: state.nickname,
+        tutorialCompleted: state.tutorialCompleted,
         achievement: state.achievement,
         unlockedLevels: state.unlockedLevels,
         unlockedTimedLevels: state.unlockedTimedLevels,

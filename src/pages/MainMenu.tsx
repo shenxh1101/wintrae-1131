@@ -385,7 +385,7 @@ function NicknameModal({ open, onClose, initialName }: NicknameModalProps) {
 export default function MainMenu() {
   const navigate = useNavigate()
   const {
-    nickname, setNickname, unlockedLevels, unlockedTimedLevels,
+    nickname, setNickname, tutorialCompleted, unlockedLevels, unlockedTimedLevels,
     totalTrainingMinutes, bestScores, achievement
   } = usePlayerStore()
   const { getTotalGames, getAbilityRadar, scoreRecords, getAverageScore } = useScoreStore()
@@ -394,13 +394,9 @@ export default function MainMenu() {
   const [showNicknameModal, setShowNicknameModal] = useState(false)
   const [editingNickname, setEditingNickname] = useState(false)
 
-  const tutorialCompleted = useMemo(() => {
-    return achievement.totalGames > 0 && unlockedLevels.length >= 1
-  }, [achievement.totalGames, unlockedLevels])
-
   const orderProgress = unlockedLevels.length
   const timedProgress = unlockedTimedLevels.length
-  const reviewCount = scoreRecords.filter(r => r.session.levelType === 'order' || r.session.levelType === 'timed').length
+  const reviewCount = scoreRecords.length
 
   const totalOrderLevels = ORDER_LEVELS.length
   const totalTimedLevels = TIMED_LEVELS.length
@@ -421,13 +417,16 @@ export default function MainMenu() {
     return Math.round(sum / 4)
   }, [abilityRadar])
 
+  const bestTutorialScore = Math.max(0, ...Object.entries(bestScores)
+    .filter(([k]) => k.startsWith('tutorial-'))
+    .map(([, v]) => v))
   const bestOrderScore = Math.max(0, ...Object.entries(bestScores)
     .filter(([k]) => k.startsWith('order-'))
     .map(([, v]) => v))
   const bestTimedScore = Math.max(0, ...Object.entries(bestScores)
     .filter(([k]) => k.startsWith('timed-'))
     .map(([, v]) => v))
-  const bestOverallScore = Math.max(bestOrderScore, bestTimedScore)
+  const bestOverallScore = Math.max(bestTutorialScore, bestOrderScore, bestTimedScore)
 
   useEffect(() => {
     if (nickname === '新玩家') {
@@ -463,7 +462,7 @@ export default function MainMenu() {
       icon: <ClipboardList className="w-7 h-7" />,
       title: '订单关',
       subtitle: '按订单完成拣货任务',
-      statusText: '解锁进度',
+      statusText: tutorialCompleted ? '解锁进度' : '完成教学关解锁',
       progress: orderProgress,
       maxProgress: totalOrderLevels,
       gradient: 'from-emerald-600/20 to-emerald-900/30',
@@ -484,7 +483,7 @@ export default function MainMenu() {
       gradient: 'from-orange-600/20 to-orange-900/30',
       glowColor: '#F59E0B',
       borderColor: '#F59E0B',
-      locked: orderProgress < 3,
+      locked: false,
       iconBg: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
       onClick: () => navigate('/timed')
     },
@@ -493,15 +492,15 @@ export default function MainMenu() {
       icon: <Search className="w-7 h-7" />,
       title: '错误复盘',
       subtitle: '分析操作记录优化流程',
-      statusText: `最近复盘: ${reviewCount}次`,
-      progress: Math.min(reviewCount, 20),
+      statusText: `${scoreRecords.length} 次复盘记录`,
+      progress: Math.min(scoreRecords.length, 20),
       maxProgress: 20,
       gradient: 'from-purple-600/20 to-purple-900/30',
       glowColor: '#8B5CF6',
       borderColor: '#8B5CF6',
-      locked: reviewCount === 0,
+      locked: scoreRecords.length === 0,
       iconBg: 'bg-purple-500/20 text-purple-400 border border-purple-500/30',
-      onClick: () => reviewCount > 0 && navigate('/review/last')
+      onClick: () => scoreRecords.length > 0 && navigate('/review/last')
     },
     {
       key: 'leaderboard',
@@ -709,8 +708,8 @@ export default function MainMenu() {
             <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-5">
               {cardConfigs.map((config, idx) => (
                 <MenuCard
-                  key={config.key}
                   {...config}
+                  key={config.key}
                   delay={idx}
                 />
               ))}

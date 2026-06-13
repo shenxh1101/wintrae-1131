@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
-import type { Position, Shelf, Location, StockItem } from '@/data/mockData'
-import { getStockByLocation } from '@/data/mockData'
+import type { Position } from '@/types'
+import type { Shelf, Location, StockItem, Product } from '@/data/mockData'
+import { getStockByLocation, getProductBySku } from '@/data/mockData'
 
 const CELL_SIZE = 40
 const GRID_WIDTH = 20
@@ -75,10 +76,21 @@ export default function WarehouseMap({
     const rect = (e.currentTarget as SVGElement).getBoundingClientRect()
     const svgRect = (e.currentTarget.closest('svg') as SVGElement)?.getBoundingClientRect()
     if (svgRect) {
-      setTooltipPos({
-        x: rect.left - svgRect.left + rect.width / 2,
-        y: rect.top - svgRect.top - 8,
-      })
+      const tooltipWidth = 200
+      const tooltipHeight = 120
+      const margin = 8
+      
+      let x = rect.left - svgRect.left + rect.width / 2
+      let y = rect.top - svgRect.top - margin
+      
+      const minX = tooltipWidth / 2 + margin
+      const maxX = SVG_WIDTH - tooltipWidth / 2 - margin
+      const minY = tooltipHeight + margin
+      
+      x = Math.max(minX, Math.min(maxX, x))
+      y = Math.max(minY, y)
+      
+      setTooltipPos({ x, y })
     }
     setHoveredLocationId(locationId)
   }
@@ -132,6 +144,7 @@ export default function WarehouseMap({
 
   const hoveredStock = hoveredLocationId ? getStockByLocation(hoveredLocationId) : null
   const hoveredLoc = hoveredLocationId ? locationMap.get(hoveredLocationId) : null
+  const hoveredProduct = hoveredStock ? getProductBySku(hoveredStock.sku) : null
 
   return (
     <div className="relative w-full h-full flex items-center justify-center bg-warehouse-navyDark rounded-xl overflow-hidden">
@@ -234,11 +247,15 @@ export default function WarehouseMap({
 
           {locations.map(loc => {
             const stock = stockItems.find(s => s.locationId === loc.locationId)
+            const product = stock ? getProductBySku(stock.sku) : null
             const isTarget = targetLocations.includes(loc.locationId)
             const isSelected = selectedLocationId === loc.locationId
             const cx = loc.posX * CELL_SIZE
             const cy = loc.posY * CELL_SIZE
             const locSize = CELL_SIZE * 0.55
+            const isSoldOut = stock && stock.quantity === 0
+            const displayColor = isSoldOut ? '#9CA3AF' : (product?.color || '#9CA3AF')
+            const displayShape = product?.shape || 'square'
 
             return (
               <g
@@ -310,15 +327,15 @@ export default function WarehouseMap({
                 />
 
                 {stock && (
-                  <g>
+                  <g opacity={isSoldOut ? 0.5 : 1}>
                     {renderShape(
-                      (stock as any).shape || 'square',
-                      (stock as any).color || '#9CA3AF',
+                      displayShape,
+                      displayColor,
                       cx,
                       cy,
                       locSize * 0.65
                     )}
-                    {stock.isNearExpiry && (
+                    {stock.isNearExpiry && !isSoldOut && (
                       <circle
                         cx={cx + locSize * 0.3}
                         cy={cy - locSize * 0.3}
@@ -327,6 +344,18 @@ export default function WarehouseMap({
                         stroke="#fff"
                         strokeWidth="1"
                       />
+                    )}
+                    {isSoldOut && (
+                      <text
+                        x={cx}
+                        y={cy + locSize * 0.55}
+                        fill="#9CA3AF"
+                        fontSize="8"
+                        textAnchor="middle"
+                        fontWeight="bold"
+                      >
+                        售罄
+                      </text>
                     )}
                   </g>
                 )}
@@ -444,35 +473,40 @@ export default function WarehouseMap({
                 transform: 'translate(-50%, -100%)',
               }}
             >
-              <div className="bg-warehouse-navy border border-warehouse-navyLight rounded-lg p-2.5 shadow-card min-w-[160px]">
+              <div className="bg-warehouse-navy border border-warehouse-navyLight rounded-lg p-2.5 shadow-card min-w-[180px]">
                 <div className="text-xs font-mono text-warehouse-orange mb-1">
                   {hoveredLoc.locationId}
                 </div>
-                {hoveredStock ? (
+                {hoveredStock && hoveredProduct ? (
                   <>
-                    <div className="text-sm font-semibold text-white mb-1">
-                      {(hoveredStock as any).name || hoveredStock.sku}
+                    <div className="text-sm font-semibold text-white mb-1.5">
+                      {hoveredProduct.name}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-gray-300">
+                    <div className="flex items-center gap-2 text-xs text-gray-300 mb-1.5">
                       <span className="flex items-center gap-1">
                         <span
                           className="w-2.5 h-2.5 rounded-sm"
-                          style={{ backgroundColor: (hoveredStock as any).color || '#9CA3AF' }}
+                          style={{ backgroundColor: hoveredStock.quantity === 0 ? '#9CA3AF' : hoveredProduct.color }}
                         />
                         SKU: {hoveredStock.sku}
                       </span>
                     </div>
-                    <div className="flex items-center justify-between mt-1.5 text-xs">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-gray-400">货位:</span>
+                      <span className="text-white font-mono">{hoveredLoc.locationId}</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-1 text-xs">
                       <span className="text-gray-400">库存:</span>
                       <span className={cn(
                         'font-semibold',
+                        hoveredStock.quantity === 0 ? 'text-gray-500' :
                         hoveredStock.quantity < 5 ? 'text-warehouse-danger' : 'text-warehouse-success'
                       )}>
-                        {hoveredStock.quantity} 件
+                        {hoveredStock.quantity === 0 ? '已售罄' : `${hoveredStock.quantity} 件`}
                       </span>
                     </div>
-                    {hoveredStock.isNearExpiry && (
-                      <div className="mt-1.5 text-xs text-warehouse-danger bg-warehouse-danger/10 rounded px-1.5 py-0.5 inline-flex items-center gap-1">
+                    {hoveredStock.isNearExpiry && hoveredStock.quantity > 0 && (
+                      <div className="mt-2 text-xs text-warehouse-danger bg-warehouse-danger/10 rounded px-1.5 py-0.5 inline-flex items-center gap-1">
                         ⚠️ 临期品
                       </div>
                     )}

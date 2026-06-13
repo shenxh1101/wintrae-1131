@@ -145,12 +145,21 @@ export default function OrderLevel() {
   const unlockLevel = usePlayerStore((s) => s.unlockLevel)
   const updateBestScore = usePlayerStore((s) => s.updateBestScore)
   const addTrainingTime = usePlayerStore((s) => s.addTrainingTime)
+  const updateAchievement = usePlayerStore((s) => s.updateAchievement)
+  const updateAbilityRadar = usePlayerStore((s) => s.updateAbilityRadar)
+  const achievement = usePlayerStore((s) => s.achievement)
   const playerId = usePlayerStore((s) => s.playerId)
   const nickname = usePlayerStore((s) => s.nickname)
   const addScoreRecord = useScoreStore((s) => s.addScoreRecord)
 
   const gameState = useGameStore()
   const grid = useMemo(() => buildGrid(), [])
+
+  useEffect(() => {
+    if (!unlockedLevels.includes(1)) {
+      unlockLevel(1, 'order')
+    }
+  }, [unlockedLevels, unlockLevel])
 
   const currentLevel = ORDER_LEVELS.find((l) => l.levelId === selectedLevelId) ?? ORDER_LEVELS[0]
 
@@ -603,6 +612,18 @@ export default function OrderLevel() {
       }
       addTrainingTime(Math.round(elapsedMs / 60000))
 
+      const newTotalGames = (achievement.totalGames ?? 0) + 1
+      updateAchievement({ totalGames: newTotalGames })
+
+      const speedValue = Math.min(100, Math.round((totalScore / (elapsedMs / 60000)) / 10))
+      const accuracyValue = Math.round(finalAccuracy)
+      const pathValue = Math.round(pathScoreVal)
+      const emergencyValue = Math.min(100, Math.round(eventBonus > 0 ? 100 : 50))
+      updateAbilityRadar('speed', speedValue)
+      updateAbilityRadar('accuracy', accuracyValue)
+      updateAbilityRadar('pathPlanning', pathValue)
+      updateAbilityRadar('emergency', emergencyValue)
+
       const scoreRecord: ScoreType = {
         scoreId: generateId('scr'),
         sessionId: state.sessionId,
@@ -614,6 +635,8 @@ export default function OrderLevel() {
         rank: 0,
         nearExpiryBonus,
         raceConditionBonus: eventBonus,
+        operationLogs: [...state.operationLogs],
+        playerPath: [...playerPath],
       }
 
       const session: GameSession = {
@@ -680,6 +703,9 @@ export default function OrderLevel() {
       unlockLevel,
       updateBestScore,
       addTrainingTime,
+      updateAchievement,
+      updateAbilityRadar,
+      achievement,
       playerId,
       nickname,
       addScoreRecord,

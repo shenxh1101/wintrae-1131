@@ -12,6 +12,7 @@ import {
 } from 'recharts'
 import { cn } from '@/lib/utils'
 import { useScoreStore } from '@/store/useScoreStore'
+import { usePlayerStore } from '@/store/usePlayerStore'
 import type { LevelType, LeaderboardEntry, AbilityRadar, TrendPoint } from '@/types'
 import { ORDER_LEVELS, TIMED_LEVELS } from '@/data/mockData'
 import { calculateAbilityMetrics, getScoreRank, SCORE_CONSTANTS, type ScoreBreakdown } from '@/utils/scoreCalculator'
@@ -26,9 +27,6 @@ const DIFFICULTY_LABELS: Record<Difficulty, string> = {
   4: '困难',
   5: '专家',
 }
-
-const MOCK_NICKNAME = '仓库新星'
-const MOCK_PLAYER_ID = 'player-local-001'
 
 interface PodiumEntry extends LeaderboardEntry {
   medalColor: string
@@ -285,6 +283,11 @@ export default function Leaderboard() {
   const [isLoading, setIsLoading] = useState(false)
 
   const scoreStore = useScoreStore()
+  const playerStore = usePlayerStore()
+  const playerId = playerStore.playerId
+  const nickname = playerStore.nickname
+  const totalTrainingMinutes = playerStore.totalTrainingMinutes
+  const bestScores = playerStore.bestScores
 
   const currentLevelType: LevelType = activeTab === 'order' ? 'order' : activeTab === 'timed' ? 'timed' : 'order'
   const currentLevelId = activeTab === 'order' ? orderLevelId : activeTab === 'timed' ? timedLevelId : 1
@@ -321,20 +324,41 @@ export default function Leaderboard() {
     return base.map((e, i) => ({ ...e, rank: i + 1 }))
   }, [scoreStore.leaderboard, activeTab, currentLevelType, currentLevelId])
 
-  const myEntry: LeaderboardEntry = useMemo(() => {
-    const myScore = 720 + (currentLevelId * 15) - (difficulty * 8)
+  const myEntry: LeaderboardEntry | null = useMemo(() => {
+    const myBest = scoreStore.getPersonalBest(playerId, currentLevelType, currentLevelId)
+    if (!myBest) {
+      const localRecords = scoreStore.getLevelScores(currentLevelType, currentLevelId)
+        .filter(r => r.session.playerId === playerId)
+      if (localRecords.length === 0) return null
+      const best = localRecords[0]
+      const myScore = best.score.totalScore
+      const rankInCombined = leaderboardData.findIndex(e => e.totalScore <= myScore)
+      return {
+        rank: rankInCombined >= 0 ? rankInCombined + 1 : leaderboardData.length + 1,
+        playerId,
+        nickname,
+        levelType: currentLevelType,
+        levelId: currentLevelId,
+        totalScore: myScore,
+        accuracy: best.score.accuracy,
+        durationMs: best.session.durationMs,
+        timestamp: best.timestamp,
+      }
+    }
+    const myScore = myBest.score.totalScore
+    const rankInCombined = leaderboardData.findIndex(e => e.totalScore <= myScore)
     return {
-      rank: Math.min(leaderboardData.length + 1, Math.max(3, Math.floor(leaderboardData.length * 0.4))),
-      playerId: MOCK_PLAYER_ID,
-      nickname: MOCK_NICKNAME,
+      rank: rankInCombined >= 0 ? rankInCombined + 1 : leaderboardData.length + 1,
+      playerId,
+      nickname,
       levelType: currentLevelType,
       levelId: currentLevelId,
       totalScore: myScore,
-      accuracy: 92.3,
-      durationMs: 142000,
-      timestamp: new Date().toISOString(),
+      accuracy: myBest.score.accuracy,
+      durationMs: myBest.session.durationMs,
+      timestamp: myBest.timestamp,
     }
-  }, [leaderboardData, currentLevelType, currentLevelId, difficulty])
+  }, [leaderboardData, currentLevelType, currentLevelId, playerId, nickname, scoreStore])
 
   const top3 = leaderboardData.slice(0, 3).map((e, i): PodiumEntry => ({
     ...e,
@@ -364,63 +388,84 @@ export default function Leaderboard() {
   }, [currentLevelId])
 
   const myAbilityRadar: AbilityRadar = useMemo(() => {
-    const storeRadar = scoreStore.getAbilityRadar(MOCK_PLAYER_ID)
-    if (storeRadar.speed > 0 || storeRadar.accuracy > 0) return storeRadar
-    return {
-      speed: 78,
-      accuracy: 92,
-      pathPlanning: 81,
-      emergency: 67,
-    }
-  }, [scoreStore])
+    return scoreStore.getAbilityRadar(playerId)
+  }, [scoreStore, playerId])
 
   const scoreTrend: (TrendPoint & { accuracy?: number })[] = useMemo(() => {
-    const fromStore = scoreStore.getScoreTrend(MOCK_PLAYER_ID, 10)
-    const accFromStore = scoreStore.getAccuracyTrend(MOCK_PLAYER_ID, 10)
-    if (fromStore.length >= 5) {
+    const fromStore = scoreStore.getScoreTrend(playerId, 10)
+    const accFromStore = scoreStore.getAccuracyTrend(playerId, 10)
+    if (fromStore.length >= 2) {
       return fromStore.map((p, i) => ({
         ...p,
         accuracy: accFromStore[i]?.value ?? 90,
       }))
     }
-    return Array.from({ length: 10 }, (_, i) => {
-      const base = 620 + i * 12 + Math.floor(Math.sin(i * 2.1) * 35)
-      return {
-        date: `${i + 1}`,
-        value: base,
-        accuracy: Number((87 + Math.sin(i * 1.7) * 7).toFixed(1)),
-        levelId: (i % 5) + 1,
-      }
-    })
-  }, [scoreStore])
+    return []
+  }, [scoreStore, playerId])
 
   const levelHeatmapData = useMemo(() => {
     const allLevels = [
-      ...ORDER_LEVELS.map(l => ({ id: `O${l.levelId}`, name: l.name.slice(0, 4), bestScore: l.baseScore + 250 + Math.floor(Math.sin(l.levelId * 3) * 120) })),
-      ...TIMED_LEVELS.map(l => ({ id: `T${l.levelId}`, name: l.name.slice(0, 4), bestScore: l.baseScore + 150 + Math.floor(Math.cos(l.levelId * 2) * 100) })),
+      ...ORDER_LEVELS.map(l => ({
+        id: `O${l.levelId}`,
+        name: l.name.slice(0, 4),
+        bestScore: bestScores[`order-${l.levelId}`] ?? 0
+      })),
+      ...TIMED_LEVELS.map(l => ({
+        id: `T${l.levelId}`,
+        name: l.name.slice(0, 4),
+        bestScore: bestScores[`timed-${l.levelId}`] ?? 0
+      })),
     ]
     return allLevels
-  }, [])
+  }, [bestScores])
 
-  const myErrorStats = useMemo(() => [
-    { name: '错拣', value: 5, color: '#F43F5E' },
-    { name: '漏拣', value: 3, color: '#EF4444' },
-    { name: '数量错误', value: 4, color: '#F97316' },
-    { name: '顺序错误', value: 2, color: '#8B5CF6' },
-    { name: '货位错误', value: 6, color: '#EAB308' },
-  ], [])
+  const myErrorStats = useMemo(() => {
+    const playerRecords = scoreStore.getPlayerScores(playerId)
+    const errorCounts: Record<string, number> = {
+      '错拣': 0,
+      '漏拣': 0,
+      '数量错误': 0,
+      '货位错误': 0,
+    }
+    
+    playerRecords.forEach(record => {
+      const wrongPicks = Math.floor(record.score.penaltyPoints / 50)
+      errorCounts['错拣'] += wrongPicks
+      errorCounts['货位错误'] += Math.floor(wrongPicks * 0.4)
+      errorCounts['数量错误'] += Math.floor(wrongPicks * 0.3)
+      errorCounts['漏拣'] += Math.floor(wrongPicks * 0.3)
+    })
+
+    const colors: Record<string, string> = {
+      '错拣': '#F43F5E',
+      '漏拣': '#EF4444',
+      '数量错误': '#F97316',
+      '货位错误': '#EAB308',
+    }
+
+    return Object.entries(errorCounts)
+      .filter(([, value]) => value > 0)
+      .map(([name, value]) => ({
+        name,
+        value,
+        color: colors[name] || '#8B5CF6',
+      }))
+  }, [scoreStore, playerId])
 
   const myTrainingStats = useMemo(() => {
-    const games = scoreStore.getTotalGames(MOCK_PLAYER_ID) || 24
-    const avg = scoreStore.getAverageScore(MOCK_PLAYER_ID) || 742
+    const games = scoreStore.getTotalGames(playerId)
+    const avg = scoreStore.getAverageScore(playerId)
+    const totalHours = Number((totalTrainingMinutes / 60).toFixed(1))
+    const level = games >= 20 ? 'L3 拣货员' : games >= 10 ? 'L2 熟练工' : games >= 3 ? 'L1 新手' : 'L0 学员'
+    const expProgress = Math.min(100, (games % 10) * 10)
     return {
       games,
-      totalHours: 18.5,
+      totalHours,
       avgScore: avg,
-      level: 'L3 拣货员',
-      expProgress: 68,
+      level,
+      expProgress,
     }
-  }, [scoreStore])
+  }, [scoreStore, playerId, totalTrainingMinutes])
 
   const orderLevelOptions = ORDER_LEVELS.map(l => ({ value: l.levelId, label: `L${l.levelId} ${l.name}` }))
   const timedLevelOptions = TIMED_LEVELS.map(l => ({ value: l.levelId, label: `L${l.levelId} ${l.name}` }))
@@ -550,13 +595,15 @@ export default function Leaderboard() {
                     ))}
                   </div>
 
-                  <div>
-                    <h3 className="text-sm font-semibold text-white/70 px-1 mb-2 flex items-center gap-2">
-                      <User size={16} className="text-warehouse-orange" />
-                      我的排名
-                    </h3>
-                    <RankCard entry={myEntry} isMine />
-                  </div>
+                  {myEntry && (
+                    <div>
+                      <h3 className="text-sm font-semibold text-white/70 px-1 mb-2 flex items-center gap-2">
+                        <User size={16} className="text-warehouse-orange" />
+                        我的排名
+                      </h3>
+                      <RankCard entry={myEntry} isMine />
+                    </div>
+                  )}
 
                   <div className="rounded-2xl bg-white/5 border border-white/10 p-4 md:p-5">
                     <h3 className="text-sm font-semibold text-white/70 mb-3 flex items-center gap-2">
@@ -620,7 +667,7 @@ export default function Leaderboard() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h2 className="text-xl md:text-2xl font-black">{MOCK_NICKNAME}</h2>
+                      <h2 className="text-xl md:text-2xl font-black">{nickname}</h2>
                       <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
                         <Flame size={11} /> 连续 7 天
                       </span>
@@ -636,7 +683,7 @@ export default function Leaderboard() {
                     <div className="mt-1 text-[11px] text-white/45 flex items-center gap-3 flex-wrap">
                       <span>经验值 {myTrainingStats.expProgress}%</span>
                       <span className="text-white/25">|</span>
-                      <span>ID: {MOCK_PLAYER_ID}</span>
+                      <span>ID: {playerId.slice(-8)}</span>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3 md:gap-5 min-w-[260px]">
@@ -729,64 +776,70 @@ export default function Leaderboard() {
                     <TrendingUp size={16} className="text-emerald-400" />
                     近10次成绩趋势
                   </h3>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={scoreTrend}
-                        margin={{ top: 5, right: 20, left: 0, bottom: 0 }}
-                      >
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                        <XAxis
-                          dataKey="date"
-                          tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
-                          label={{ value: '场次', position: 'insideBottom', offset: -4, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
-                        />
-                        <YAxis
-                          yAxisId="left"
-                          tick={{ fill: 'rgba(255,107,53,0.7)', fontSize: 11 }}
-                          stroke="rgba(255,107,53,0.3)"
-                        />
-                        <YAxis
-                          yAxisId="right"
-                          orientation="right"
-                          tick={{ fill: 'rgba(16,185,129,0.7)', fontSize: 11 }}
-                          stroke="rgba(16,185,129,0.3)"
-                          domain={[70, 100]}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#1E3A5F',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '8px',
-                            fontSize: '12px',
-                          }}
-                        />
-                        <Legend wrapperStyle={{ fontSize: '11px' }} />
-                        <Line
-                          yAxisId="left"
-                          type="monotone"
-                          dataKey="value"
-                          name="分数"
-                          stroke="#FF6B35"
-                          strokeWidth={2.5}
-                          dot={{ fill: '#FF6B35', r: 3, strokeWidth: 2, stroke: '#fff' }}
-                          activeDot={{ r: 5, fill: '#FF6B35' }}
-                          animationDuration={800}
-                        />
-                        <Line
-                          yAxisId="right"
-                          type="monotone"
-                          dataKey="accuracy"
-                          name="准确率(%)"
-                          stroke="#10B981"
-                          strokeWidth={2.5}
-                          dot={{ fill: '#10B981', r: 3, strokeWidth: 2, stroke: '#fff' }}
-                          activeDot={{ r: 5, fill: '#10B981' }}
-                          animationDuration={800}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
+                  {scoreTrend.length > 0 ? (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={scoreTrend}
+                          margin={{ top: 5, right: 20, left: 0, bottom: 0 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                          <XAxis
+                            dataKey="date"
+                            tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 11 }}
+                            label={{ value: '场次', position: 'insideBottom', offset: -4, fill: 'rgba(255,255,255,0.4)', fontSize: 11 }}
+                          />
+                          <YAxis
+                            yAxisId="left"
+                            tick={{ fill: 'rgba(255,107,53,0.7)', fontSize: 11 }}
+                            stroke="rgba(255,107,53,0.3)"
+                          />
+                          <YAxis
+                            yAxisId="right"
+                            orientation="right"
+                            tick={{ fill: 'rgba(16,185,129,0.7)', fontSize: 11 }}
+                            stroke="rgba(16,185,129,0.3)"
+                            domain={[70, 100]}
+                          />
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#1E3A5F',
+                              border: '1px solid rgba(255,255,255,0.1)',
+                              borderRadius: '8px',
+                              fontSize: '12px',
+                            }}
+                          />
+                          <Legend wrapperStyle={{ fontSize: '11px' }} />
+                          <Line
+                            yAxisId="left"
+                            type="monotone"
+                            dataKey="value"
+                            name="分数"
+                            stroke="#FF6B35"
+                            strokeWidth={2.5}
+                            dot={{ fill: '#FF6B35', r: 3, strokeWidth: 2, stroke: '#fff' }}
+                            activeDot={{ r: 5, fill: '#FF6B35' }}
+                            animationDuration={800}
+                          />
+                          <Line
+                            yAxisId="right"
+                            type="monotone"
+                            dataKey="accuracy"
+                            name="准确率(%)"
+                            stroke="#10B981"
+                            strokeWidth={2.5}
+                            dot={{ fill: '#10B981', r: 3, strokeWidth: 2, stroke: '#fff' }}
+                            activeDot={{ r: 5, fill: '#10B981' }}
+                            animationDuration={800}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-64 flex items-center justify-center text-white/40 text-sm">
+                      暂无训练记录，完成训练后查看趋势
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-2xl bg-white/5 border border-white/10 p-5">
@@ -839,68 +892,74 @@ export default function Leaderboard() {
                     <AlertCircle size={16} className="text-rose-400" />
                     错误类型累计统计
                   </h3>
-                  <div className="flex items-center gap-4">
-                    <div className="w-1/2 h-52">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={myErrorStats}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={45}
-                            outerRadius={78}
-                            paddingAngle={3}
-                            dataKey="value"
-                            animationDuration={800}
-                          >
-                            {myErrorStats.map((entry, i) => (
-                              <Cell key={i} fill={entry.color} stroke="rgba(255,255,255,0.08)" strokeWidth={2} />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#1E3A5F',
-                              border: '1px solid rgba(255,255,255,0.1)',
-                              borderRadius: '8px',
-                              fontSize: '12px',
-                            }}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-                    <div className="w-1/2 space-y-2">
-                      {myErrorStats.map(item => {
-                        const total = myErrorStats.reduce((s, e) => s + e.value, 0)
-                        const pct = Math.round((item.value / total) * 100)
-                        return (
-                          <div key={item.name}>
-                            <div className="flex items-center justify-between text-xs mb-1">
-                              <span className="flex items-center gap-1.5">
-                                <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
-                                <span className="text-white/70">{item.name}</span>
-                              </span>
-                              <span className="text-white/60 font-mono">{item.value}次 · {pct}%</span>
+                  {myErrorStats.length > 0 ? (
+                    <div className="flex items-center gap-4">
+                      <div className="w-1/2 h-52">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={myErrorStats}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={45}
+                              outerRadius={78}
+                              paddingAngle={3}
+                              dataKey="value"
+                              animationDuration={800}
+                            >
+                              {myErrorStats.map((entry, i) => (
+                                <Cell key={i} fill={entry.color} stroke="rgba(255,255,255,0.08)" strokeWidth={2} />
+                              ))}
+                            </Pie>
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: '#1E3A5F',
+                                border: '1px solid rgba(255,255,255,0.1)',
+                                borderRadius: '8px',
+                                fontSize: '12px',
+                              }}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                      <div className="w-1/2 space-y-2">
+                        {myErrorStats.map(item => {
+                          const total = myErrorStats.reduce((s, e) => s + e.value, 0)
+                          const pct = Math.round((item.value / total) * 100)
+                          return (
+                            <div key={item.name}>
+                              <div className="flex items-center justify-between text-xs mb-1">
+                                <span className="flex items-center gap-1.5">
+                                  <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
+                                  <span className="text-white/70">{item.name}</span>
+                                </span>
+                                <span className="text-white/60 font-mono">{item.value}次 · {pct}%</span>
+                              </div>
+                              <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                <motion.div
+                                  initial={{ width: 0 }}
+                                  animate={{ width: `${pct}%` }}
+                                  transition={{ duration: 0.8, ease: 'easeOut' }}
+                                  className="h-full rounded-full"
+                                  style={{ backgroundColor: item.color }}
+                                />
+                              </div>
                             </div>
-                            <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
-                              <motion.div
-                                initial={{ width: 0 }}
-                                animate={{ width: `${pct}%` }}
-                                transition={{ duration: 0.8, ease: 'easeOut' }}
-                                className="h-full rounded-full"
-                                style={{ backgroundColor: item.color }}
-                              />
-                            </div>
-                          </div>
-                        )
-                      })}
-                      <div className="mt-3 pt-2 border-t border-white/5 text-[11px] text-white/40 flex items-center justify-between">
-                        <span>累计错误</span>
-                        <span className="text-white/70 font-mono font-semibold">
-                          {myErrorStats.reduce((s, e) => s + e.value, 0)} 次
-                        </span>
+                          )
+                        })}
+                        <div className="mt-3 pt-2 border-t border-white/5 text-[11px] text-white/40 flex items-center justify-between">
+                          <span>累计错误</span>
+                          <span className="text-white/70 font-mono font-semibold">
+                            {myErrorStats.reduce((s, e) => s + e.value, 0)} 次
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="h-52 flex items-center justify-center text-white/40 text-sm">
+                      暂无错误记录，完成训练后查看统计
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>

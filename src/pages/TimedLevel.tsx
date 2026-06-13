@@ -18,6 +18,8 @@ import {
   AlertOctagon,
   ShoppingBag,
   TimerReset,
+  GitMerge,
+  ArrowRight,
 } from 'lucide-react'
 import { useGameStore } from '@/store/useGameStore'
 import { usePlayerStore } from '@/store/usePlayerStore'
@@ -25,6 +27,7 @@ import { useScoreStore } from '@/store/useScoreStore'
 import WarehouseMap from '@/components/WarehouseMap'
 import OrderPanel from '@/components/OrderPanel'
 import OperationPanel from '@/components/OperationPanel'
+import HUD from '@/components/HUD'
 import GameNotification, { GameEventNotification } from '@/components/GameNotification'
 import LevelResultModal, { LevelResultData, GradeRank, ScoreDetailItem } from '@/components/LevelResultModal'
 import {
@@ -161,6 +164,7 @@ export default function TimedLevel() {
   const [feedbackFlash, setFeedbackFlash] = useState<'success' | 'error' | null>(null)
   const [mergeBonus, setMergeBonus] = useState(0)
   const [mergeHints, setMergeHints] = useState<string[][]>([])
+  const [mergedCount, setMergedCount] = useState(0)
   const [completedOrdersCount, setCompletedOrdersCount] = useState(0)
 
   const animFrameRef = useRef<number | null>(null)
@@ -175,12 +179,20 @@ export default function TimedLevel() {
   const unlockLevel = usePlayerStore((s) => s.unlockLevel)
   const updateBestScore = usePlayerStore((s) => s.updateBestScore)
   const addTrainingTime = usePlayerStore((s) => s.addTrainingTime)
+  const updateAchievement = usePlayerStore((s) => s.updateAchievement)
+  const achievement = usePlayerStore((s) => s.achievement)
   const playerId = usePlayerStore((s) => s.playerId)
   const nickname = usePlayerStore((s) => s.nickname)
   const addScoreRecord = useScoreStore((s) => s.addScoreRecord)
 
   const gameState = useGameStore()
   const grid = useMemo(() => buildGrid(), [])
+
+  useEffect(() => {
+    if (!unlockedLevels.includes(1)) {
+      unlockLevel(1, 'timed')
+    }
+  }, [unlockedLevels, unlockLevel])
 
   const currentLevel = TIMED_LEVELS.find((l) => l.levelId === selectedLevelId) ?? TIMED_LEVELS[0]
 
@@ -355,6 +367,8 @@ export default function TimedLevel() {
     setNearExpiryBonus(0)
     setEventBonus(0)
     setMergeBonus(0)
+    setMergeHints([])
+    setMergedCount(0)
     setCompletedOrdersCount(0)
     setShowResult(false)
     setResultData(null)
@@ -738,6 +752,7 @@ export default function TimedLevel() {
       })
 
       setMergeBonus((prev) => prev + 30 * (orderIds.length - 1))
+      setMergedCount((prev) => prev + orderIds.length - 1)
       pushNotification(
         'success',
         `🔀 合并成功：${orderIds.length} 个订单合并，+${30 * (orderIds.length - 1)}分`
@@ -757,6 +772,15 @@ export default function TimedLevel() {
       const correctOps = state.operationLogs.filter((l) => l.isCorrect).length
       const totalOps = state.operationLogs.filter((l) => l.action === 'pick' || l.action === 'scan').length
       const finalAccuracy = totalOps > 0 ? (correctOps / totalOps) * 100 : 100
+
+      const newTotalGames = (achievement.totalGames || 0) + 1
+      const newAvgAccuracy = achievement.totalGames > 0
+        ? ((achievement.avgAccuracy || 0) * achievement.totalGames + finalAccuracy) / newTotalGames
+        : finalAccuracy
+      updateAchievement({
+        totalGames: newTotalGames,
+        avgAccuracy: Number(newAvgAccuracy.toFixed(1))
+      })
 
       let optimalLen = 0
       const remainingTargets: Point[] = targetLocations
@@ -913,6 +937,8 @@ export default function TimedLevel() {
       unlockLevel,
       updateBestScore,
       addTrainingTime,
+      updateAchievement,
+      achievement,
       playerId,
       nickname,
       addScoreRecord,
@@ -1001,6 +1027,14 @@ export default function TimedLevel() {
       clearInterval(mergeInterval)
     }
   }, [gameStarted, showResult, finalizeGame, triggerRaceCondition, triggerGameEvent, detectMergeHints])
+
+  useEffect(() => {
+    if (!gameStarted || showResult) return
+    const allCompleted = gameState.orderItems.length > 0 && gameState.orderItems.every((oi) => oi.picked)
+    if (allCompleted) {
+      finalizeGame(true)
+    }
+  }, [gameState.orderItems, gameStarted, showResult, finalizeGame])
 
   useEffect(() => {
     return () => {
@@ -1544,12 +1578,12 @@ export default function TimedLevel() {
                     <div className="rounded-lg bg-warehouse-navy/80 border border-warehouse-navyLight/40 p-3">
                       <div className="text-[10px] text-gray-400 mb-1">难度</div>
                       <div className="flex items-center gap-0.5 mt-1">
-                        {Array.from({ length: 5 }).map((_, i) => (
+                        {Array.from({ length: Math.min(5, Math.ceil(currentLevel.levelId / 2)) }).map((_, i) => (
                           <Star
                             key={i}
                             className={cn(
                               'w-3 h-3',
-                              i < currentLevel.difficulty ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600'
+                              i < Math.ceil(currentLevel.levelId / 2) ? 'text-yellow-400 fill-yellow-400' : 'text-gray-600'
                             )}
                           />
                         ))}
@@ -1656,12 +1690,18 @@ export default function TimedLevel() {
         open={showResult}
         result={resultData}
         onViewReplay={() => {
-          if (gameState.sessionId) navigate(`/review/${gameState.sessionId}`)
+          const state = useGameStore.getState()
+          if (state.sessionId) navigate(`/review/${state.sessionId}`)
         }}
         onPlayAgain={() => {
+          useGameStore.getState().resetGame()
           setShowResult(false)
           setResultData(null)
-          handleStartGame()
+          setGameStarted(false)
+          setPlayerPath([{ ...START_POSITION }])
+          setTimeout(() => {
+            handleStartGame()
+          }, 50)
         }}
         onBackToMenu={() => navigate('/')}
       />
